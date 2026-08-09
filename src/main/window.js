@@ -1,10 +1,33 @@
 const path = require('path');
-const { BrowserWindow } = require('electron');
+const { BrowserWindow, screen } = require('electron');
 
-function createMainWindow(webVoiceUrl) {
+function isVisibleOnAnyDisplay(bounds) {
+  if (!bounds || !Number.isFinite(bounds.x) || !Number.isFinite(bounds.y)) return false;
+  return screen.getAllDisplays().some((display) => {
+    const area = display.workArea;
+    return (
+      bounds.x < area.x + area.width &&
+      bounds.x + Math.min(bounds.width || 900, 200) > area.x &&
+      bounds.y < area.y + area.height &&
+      bounds.y + Math.min(bounds.height || 640, 200) > area.y
+    );
+  });
+}
+
+function createMainWindow(webVoiceUrl, options = {}) {
+  const state = options.windowRestore ? options.windowState : null;
+  const restoredBounds = state && isVisibleOnAnyDisplay(state) ? {
+    width: state.width,
+    height: state.height,
+    x: state.x,
+    y: state.y,
+  } : {};
+
   const win = new BrowserWindow({
-    width: 1200,
-    height: 820,
+    width: restoredBounds.width || 1200,
+    height: restoredBounds.height || 820,
+    x: restoredBounds.x,
+    y: restoredBounds.y,
     minWidth: 900,
     minHeight: 640,
     title: 'Julia Desktop V2',
@@ -20,6 +43,9 @@ function createMainWindow(webVoiceUrl) {
   });
 
   win.once('ready-to-show', () => win.show());
+  win.once('ready-to-show', () => {
+    if (state?.maximized) win.maximize();
+  });
 
   if (process.env.JULIA_DIRECT_VOICE === '1') {
     win.loadURL(webVoiceUrl);
@@ -27,7 +53,8 @@ function createMainWindow(webVoiceUrl) {
     const shellPath = path.join(__dirname, '..', 'renderer', 'shell', 'index.html');
     win.loadFile(shellPath, {
       query: {
-        voiceUrl: webVoiceUrl
+        voiceUrl: webVoiceUrl,
+        defaultMode: options.defaultMode || 'text',
       }
     });
   }

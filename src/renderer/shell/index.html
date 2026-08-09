@@ -22,9 +22,12 @@
           <button id="voiceModeButton" class="mode-button" type="button">Voice</button>
         </nav>
 
-        <div class="status-pill" title="Electron shell does not own the media pipeline">
-          <span class="status-dot"></span>
-          Clean shell
+        <div class="topbar-actions">
+          <button id="settingsButton" class="settings-button" type="button">Settings</button>
+          <button id="brainStatusButton" class="status-pill" type="button" title="Julia Brain status">
+            <span id="brainStatusDot" class="status-dot"></span>
+            <span id="brainStatusText">Julia Brain</span>
+          </button>
         </div>
       </header>
 
@@ -71,6 +74,74 @@
           </div>
         </section>
       </main>
+
+      <section id="settingsPanel" class="settings-panel hidden" aria-label="Settings">
+        <div class="settings-card">
+          <div class="settings-header">
+            <div>
+              <h2>Settings</h2>
+              <p>Desktop preferences for Julia Electron V2.</p>
+            </div>
+            <button id="settingsCloseButton" class="settings-close" type="button">×</button>
+          </div>
+
+          <div class="settings-grid">
+            <div class="settings-section">
+              <h3>General</h3>
+              <label>
+                Default mode
+                <select id="defaultModeSetting">
+                  <option value="text">Text</option>
+                  <option value="voice">Voice</option>
+                </select>
+              </label>
+              <label>
+                Close behavior
+                <select id="closeBehaviorSetting">
+                  <option value="tray">Hide to tray</option>
+                  <option value="quit">Quit app</option>
+                </select>
+              </label>
+              <label class="checkbox-row">
+                <input id="launchAtLoginSetting" type="checkbox" />
+                Launch Julia at login
+              </label>
+            </div>
+
+            <div class="settings-section">
+              <h3>Julia</h3>
+              <label>
+                Brain endpoint
+                <input id="brainEndpointSetting" type="url" spellcheck="false" />
+              </label>
+              <div id="brainStatusDetails" class="settings-status">Checking Julia Brain…</div>
+              <button id="refreshBrainStatusButton" class="secondary-action" type="button">Refresh status</button>
+            </div>
+
+            <div class="settings-section">
+              <h3>Desktop</h3>
+              <label>
+                Global shortcut
+                <input id="globalShortcutSetting" type="text" spellcheck="false" />
+              </label>
+              <label class="checkbox-row">
+                <input id="windowRestoreSetting" type="checkbox" />
+                Restore window size and position
+              </label>
+              <label class="checkbox-row">
+                <input id="trayEnabledSetting" type="checkbox" />
+                Enable tray menu
+              </label>
+            </div>
+          </div>
+
+          <div id="settingsError" class="settings-error hidden"></div>
+          <div class="settings-footer">
+            <button id="settingsCancelButton" class="secondary-action" type="button">Cancel</button>
+            <button id="settingsSaveButton" class="primary-action" type="button">Save settings</button>
+          </div>
+        </div>
+      </section>
     </div>
 
     <script src="./app.js"></script>

@@ -1,7 +1,13 @@
 const DEFAULT_TEXT_API_URL = 'http://127.0.0.1:18089/v1/chat/completions';
 
-function getTextApiUrl() {
-  return process.env.JULIA_TEXT_API_URL || DEFAULT_TEXT_API_URL;
+function buildTextApiUrl(brainEndpoint) {
+  return new URL('/v1/chat/completions', brainEndpoint).toString();
+}
+
+function getTextApiUrl(options = {}) {
+  if (process.env.JULIA_TEXT_API_URL) return process.env.JULIA_TEXT_API_URL;
+  if (options.brainEndpoint) return buildTextApiUrl(options.brainEndpoint);
+  return DEFAULT_TEXT_API_URL;
 }
 
 function assertTextMessage(input) {
@@ -16,9 +22,9 @@ function assertTextMessage(input) {
   return text;
 }
 
-async function sendTextMessage(input) {
+async function sendTextMessage(input, options = {}) {
   const text = assertTextMessage(input);
-  const url = getTextApiUrl();
+  const url = getTextApiUrl(options);
 
   const response = await fetch(url, {
     method: 'POST',
@@ -80,9 +86,9 @@ function parseOpenAiSseChunk(line) {
   }
 }
 
-async function streamTextMessage(input, handlers = {}) {
+async function streamTextMessage(input, handlers = {}, options = {}) {
   const text = assertTextMessage(input);
-  const url = getTextApiUrl();
+  const url = getTextApiUrl(options);
   const onDelta = typeof handlers.onDelta === 'function' ? handlers.onDelta : () => {};
 
   const response = await fetch(url, {
@@ -160,6 +166,7 @@ async function streamTextMessage(input, handlers = {}) {
 
 module.exports = {
   DEFAULT_TEXT_API_URL,
+  buildTextApiUrl,
   getTextApiUrl,
   sendTextMessage,
   streamTextMessage,

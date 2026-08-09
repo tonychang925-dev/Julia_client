@@ -1,5 +1,6 @@
 const params = new URLSearchParams(window.location.search);
 const webVoiceUrl = params.get('voiceUrl') || 'http://localhost:7860/';
+const initialDefaultMode = params.get('defaultMode') || 'text';
 
 const app = document.getElementById('app');
 const textSurface = document.getElementById('textSurface');
@@ -18,10 +19,29 @@ const newChatButton = document.getElementById('newChatButton');
 const conversationSearch = document.getElementById('conversationSearch');
 const conversationList = document.getElementById('conversationList');
 const emptyConversationList = document.getElementById('emptyConversationList');
+const settingsButton = document.getElementById('settingsButton');
+const brainStatusButton = document.getElementById('brainStatusButton');
+const brainStatusDot = document.getElementById('brainStatusDot');
+const brainStatusText = document.getElementById('brainStatusText');
+const settingsPanel = document.getElementById('settingsPanel');
+const settingsCloseButton = document.getElementById('settingsCloseButton');
+const settingsCancelButton = document.getElementById('settingsCancelButton');
+const settingsSaveButton = document.getElementById('settingsSaveButton');
+const defaultModeSetting = document.getElementById('defaultModeSetting');
+const closeBehaviorSetting = document.getElementById('closeBehaviorSetting');
+const launchAtLoginSetting = document.getElementById('launchAtLoginSetting');
+const brainEndpointSetting = document.getElementById('brainEndpointSetting');
+const brainStatusDetails = document.getElementById('brainStatusDetails');
+const refreshBrainStatusButton = document.getElementById('refreshBrainStatusButton');
+const globalShortcutSetting = document.getElementById('globalShortcutSetting');
+const windowRestoreSetting = document.getElementById('windowRestoreSetting');
+const trayEnabledSetting = document.getElementById('trayEnabledSetting');
+const settingsError = document.getElementById('settingsError');
 
 const textClient = window.juliaElectronV2;
 let sending = false;
 let activeConversationId = null;
+let currentSettings = null;
 const activeTextStreams = new Map();
 
 voiceUrlLabel.textContent = webVoiceUrl;
@@ -33,6 +53,74 @@ function setMode(mode) {
   voiceSurface.classList.toggle('hidden', !isVoice);
   textModeButton.classList.toggle('active', !isVoice);
   voiceModeButton.classList.toggle('active', isVoice);
+}
+
+function setSettingsError(message) {
+  settingsError.textContent = message || '';
+  settingsError.classList.toggle('hidden', !message);
+}
+
+function populateSettings(settings) {
+  currentSettings = settings;
+  defaultModeSetting.value = settings.defaultMode || 'text';
+  closeBehaviorSetting.value = settings.closeBehavior || 'tray';
+  launchAtLoginSetting.checked = Boolean(settings.launchAtLogin);
+  brainEndpointSetting.value = settings.brainEndpoint || 'http://127.0.0.1:18089';
+  globalShortcutSetting.value = settings.globalShortcut || 'CommandOrControl+Shift+J';
+  windowRestoreSetting.checked = Boolean(settings.windowRestore);
+  trayEnabledSetting.checked = Boolean(settings.trayEnabled);
+}
+
+function readSettingsForm() {
+  return {
+    defaultMode: defaultModeSetting.value,
+    closeBehavior: closeBehaviorSetting.value,
+    launchAtLogin: launchAtLoginSetting.checked,
+    brainEndpoint: brainEndpointSetting.value.trim(),
+    globalShortcut: globalShortcutSetting.value.trim(),
+    windowRestore: windowRestoreSetting.checked,
+    trayEnabled: trayEnabledSetting.checked,
+  };
+}
+
+function openSettingsPanel() {
+  if (currentSettings) populateSettings(currentSettings);
+  setSettingsError('');
+  settingsPanel.classList.remove('hidden');
+  brainEndpointSetting.focus();
+}
+
+function closeSettingsPanel() {
+  settingsPanel.classList.add('hidden');
+  setSettingsError('');
+}
+
+function renderBrainStatus(status) {
+  brainStatusDot.classList.toggle('offline', !status.connected);
+  brainStatusText.textContent = status.connected ? 'Julia Brain' : 'Brain Offline';
+
+  const lines = [
+    `Endpoint: ${status.endpoint}`,
+    `Status: ${status.status}`,
+    status.contract_version ? `Contract: ${status.contract_version}` : null,
+    status.julia_core ? `Julia Core: ${status.julia_core}` : null,
+    status.error ? `Error: ${status.error}` : null,
+    status.checked_at ? `Last check: ${new Date(status.checked_at).toLocaleString()}` : null,
+  ].filter(Boolean);
+  brainStatusDetails.textContent = lines.join('\n');
+}
+
+async function refreshBrainStatus() {
+  const status = await textClient.getBrainStatus();
+  renderBrainStatus(status);
+  return status;
+}
+
+async function restoreSettingsState() {
+  const settings = await textClient.getSettings();
+  populateSettings(settings);
+  setMode(settings.defaultMode || initialDefaultMode);
+  await refreshBrainStatus();
 }
 
 function escapeHtml(value) {
@@ -507,11 +595,66 @@ conversationSearch.addEventListener('input', () => {
   });
 });
 
-setMode('text');
+settingsButton.addEventListener('click', openSettingsPanel);
+brainStatusButton.addEventListener('click', openSettingsPanel);
+settingsCloseButton.addEventListener('click', closeSettingsPanel);
+settingsCancelButton.addEventListener('click', closeSettingsPanel);
+settingsPanel.addEventListener('click', (event) => {
+  if (event.target === settingsPanel) closeSettingsPanel();
+});
+
+refreshBrainStatusButton.addEventListener('click', () => {
+  refreshBrainStatus().catch((error) => {
+    renderBrainStatus({
+      connected: false,
+      endpoint: brainEndpointSetting.value,
+      status: 'offline',
+      error: error.message,
+      checked_at: new Date().toISOString(),
+    });
+  });
+});
+
+settingsSaveButton.addEventListener('click', () => {
+  setSettingsError('');
+  textClient.updateSettings(readSettingsForm())
+    .then((settings) => {
+      populateSettings(settings);
+      setMode(settings.defaultMode || 'text');
+      closeSettingsPanel();
+      return refreshBrainStatus();
+    })
+    .catch((error) => {
+      setSettingsError(`Settings save failed: ${error.message}`);
+    });
+});
+
+setMode(initialDefaultMode === 'voice' ? 'voice' : 'text');
 composerInput.disabled = false;
 composerSend.disabled = true;
+restoreSettingsState().catch((error) => {
+  renderBrainStatus({
+    connected: false,
+    endpoint: 'unknown',
+    status: 'offline',
+    error: error.message,
+    checked_at: new Date().toISOString(),
+  });
+});
 restoreConversationState().catch((error) => {
   thread.replaceChildren();
   const message = appendMessage('assistant', `Conversation restore failed: ${error.message}`);
   message.classList.add('error');
 });
+
+setInterval(() => {
+  refreshBrainStatus().catch((error) => {
+    renderBrainStatus({
+      connected: false,
+      endpoint: currentSettings?.brainEndpoint || 'unknown',
+      status: 'offline',
+      error: error.message,
+      checked_at: new Date().toISOString(),
+    });
+  });
+}, 30000);

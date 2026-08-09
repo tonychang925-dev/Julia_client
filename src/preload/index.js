@@ -23,5 +23,10 @@ contextBridge.exposeInMainWorld('juliaElectronV2', {
     title,
   }),
   deleteConversation: (conversationId) => ipcRenderer.invoke('julia:conversation:delete', { conversationId }),
-  searchConversations: (query) => ipcRenderer.invoke('julia:conversation:search', { query })
+  searchConversations: (query) => ipcRenderer.invoke('julia:conversation:search', { query }),
+  getSettings: () => ipcRenderer.invoke('julia:settings:get'),
+  updateSettings: (settings) => ipcRenderer.invoke('julia:settings:update', settings),
+  getBrainStatus: () => ipcRenderer.invoke('julia:brain:status'),
+  showApp: () => ipcRenderer.invoke('julia:app:show'),
+  hideApp: () => ipcRenderer.invoke('julia:app:hide')
 });
