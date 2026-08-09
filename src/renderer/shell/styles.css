@@ -185,6 +185,23 @@ button, input { font: inherit; }
   border-radius: 18px;
   background: rgba(255, 255, 255, .045);
 }
+.bubble p {
+  margin: 0 0 12px;
+}
+.bubble p:last-child {
+  margin-bottom: 0;
+}
+.bubble code {
+  padding: 2px 5px;
+  border: 1px solid rgba(255,255,255,.08);
+  border-radius: 6px;
+  background: rgba(0,0,0,.22);
+  color: #d9c7ff;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: .92em;
+}
+.bubble strong { color: #fff; }
+.bubble em { color: #d9dee8; }
 .message.user .bubble {
   margin-left: auto;
   background: rgba(114, 228, 192, .08);
@@ -195,6 +212,52 @@ button, input { font: inherit; }
   background: rgba(255, 103, 103, .08);
 }
 .message[data-pending="true"] .bubble { color: var(--muted); }
+
+.message-text + .code-block,
+.code-block + .message-text {
+  margin-top: 14px;
+}
+.code-block {
+  overflow: hidden;
+  border: 1px solid rgba(255,255,255,.1);
+  border-radius: 14px;
+  background: rgba(0,0,0,.28);
+}
+.code-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 10px;
+  border-bottom: 1px solid rgba(255,255,255,.08);
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+}
+.copy-button {
+  border: 1px solid rgba(255,255,255,.1);
+  border-radius: 8px;
+  padding: 4px 8px;
+  color: var(--text);
+  background: rgba(255,255,255,.06);
+  cursor: pointer;
+  font-size: 12px;
+}
+.code-block pre {
+  margin: 0;
+  padding: 14px;
+  overflow: auto;
+}
+.code-block pre code {
+  display: block;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: #edf0f6;
+  line-height: 1.55;
+  white-space: pre;
+}
 
 .composer {
   display: flex;
