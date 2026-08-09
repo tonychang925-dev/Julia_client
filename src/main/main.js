@@ -2,13 +2,45 @@ const { app, ipcMain } = require('electron');
 const { getWebVoiceUrl, isAllowedLocalDevCertUrl } = require('./config');
 const { installPermissions } = require('./permissions');
 const { createMainWindow } = require('./window');
-const { sendTextMessage, getTextApiUrl } = require('./text-client');
+const { sendTextMessage, streamTextMessage, getTextApiUrl } = require('./text-client');
 
 let mainWindow = null;
 
 
 ipcMain.handle('julia:text:send', async (_event, input) => {
   return sendTextMessage(input);
+});
+
+ipcMain.handle('julia:text:stream', async (event, input) => {
+  const requestId = String(input?.requestId || '');
+
+  try {
+    const result = await streamTextMessage(input, {
+      onDelta: (delta, content) => {
+        event.sender.send('julia:text:stream-event', {
+          requestId,
+          type: 'delta',
+          delta,
+          content,
+        });
+      },
+    });
+
+    event.sender.send('julia:text:stream-event', {
+      requestId,
+      type: 'done',
+      content: result.content,
+    });
+
+    return result;
+  } catch (error) {
+    event.sender.send('julia:text:stream-event', {
+      requestId,
+      type: 'error',
+      error: error.message,
+    });
+    throw error;
+  }
 });
 
 app.whenReady().then(async () => {

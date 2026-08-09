@@ -17,6 +17,7 @@ const composerSend = document.getElementById('composerSend');
 
 const textClient = window.juliaElectronV2;
 let sending = false;
+const activeTextStreams = new Map();
 
 voiceUrlLabel.textContent = webVoiceUrl;
 
@@ -60,24 +61,69 @@ function setComposerBusy(isBusy) {
   composerSend.textContent = isBusy ? '…' : '↑';
 }
 
+function createRequestId() {
+  if (window.crypto?.randomUUID) return window.crypto.randomUUID();
+  return `text_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+}
+
+function setMessageContent(message, content) {
+  message.querySelector('.bubble').textContent = content;
+  thread.scrollTop = thread.scrollHeight;
+}
+
+textClient.onTextStreamEvent((event) => {
+  const stream = activeTextStreams.get(event?.requestId);
+  if (!stream) return;
+
+  if (event.type === 'delta') {
+    stream.content = event.content || `${stream.content}${event.delta || ''}`;
+    setMessageContent(stream.message, stream.content);
+    return;
+  }
+
+  if (event.type === 'done') {
+    stream.content = event.content || stream.content;
+    setMessageContent(stream.message, stream.content);
+    delete stream.message.dataset.pending;
+    activeTextStreams.delete(event.requestId);
+    return;
+  }
+
+  if (event.type === 'error') {
+    setMessageContent(stream.message, `Text mode request failed: ${event.error}`);
+    stream.message.classList.add('error');
+    delete stream.message.dataset.pending;
+    activeTextStreams.delete(event.requestId);
+  }
+});
+
 async function sendComposerMessage() {
   if (sending) return;
 
   const text = composerInput.value.trim();
   if (!text) return;
 
+  const requestId = createRequestId();
   composerInput.value = '';
   appendMessage('user', text);
   const pending = appendMessage('assistant', 'Julia is thinking…', { pending: true });
+  activeTextStreams.set(requestId, { message: pending, content: '' });
   setComposerBusy(true);
 
   try {
-    const response = await textClient.sendTextMessage(text);
-    pending.querySelector('.bubble').textContent = response.content;
+    const response = await textClient.streamTextMessage(requestId, text);
+    if (activeTextStreams.has(requestId)) {
+      setMessageContent(pending, response.content);
+      activeTextStreams.delete(requestId);
+    }
     delete pending.dataset.pending;
   } catch (error) {
-    pending.querySelector('.bubble').textContent = `Text mode request failed: ${error.message}`;
-    pending.classList.add('error');
+    if (activeTextStreams.has(requestId)) {
+      setMessageContent(pending, `Text mode request failed: ${error.message}`);
+      pending.classList.add('error');
+      delete pending.dataset.pending;
+      activeTextStreams.delete(requestId);
+    }
   } finally {
     setComposerBusy(false);
     composerInput.focus();

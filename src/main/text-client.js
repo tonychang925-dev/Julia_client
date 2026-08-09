@@ -56,8 +56,111 @@ async function sendTextMessage(input) {
   };
 }
 
+function parseOpenAiSseChunk(line) {
+  if (!line.startsWith('data:')) return null;
+
+  const payload = line.slice(5).trim();
+  if (!payload || payload === '[DONE]') {
+    return { done: payload === '[DONE]' };
+  }
+
+  try {
+    const data = JSON.parse(payload);
+    const delta = data?.choices?.[0]?.delta?.content || '';
+    const finishReason = data?.choices?.[0]?.finish_reason || null;
+    return {
+      done: finishReason === 'stop',
+      delta,
+    };
+  } catch (error) {
+    return {
+      done: false,
+      error: `Invalid Julia text stream chunk: ${error.message}`,
+    };
+  }
+}
+
+async function streamTextMessage(input, handlers = {}) {
+  const text = assertTextMessage(input);
+  const url = getTextApiUrl();
+  const onDelta = typeof handlers.onDelta === 'function' ? handlers.onDelta : () => {};
+
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      model: 'julia-brain',
+      stream: true,
+      messages: [
+        {
+          role: 'user',
+          content: text,
+        },
+      ],
+    }),
+  });
+
+  if (!response.ok) {
+    const body = await response.text().catch(() => '');
+    throw new Error(`Julia text stream failed: HTTP ${response.status}${body ? ` ${body.slice(0, 240)}` : ''}`);
+  }
+
+  if (!response.body) {
+    throw new Error('Julia text stream did not provide a response body');
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let content = '';
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (value) {
+      buffer += decoder.decode(value, { stream: !done });
+      const lines = buffer.split(/\r?\n/);
+      buffer = lines.pop() || '';
+
+      for (const line of lines) {
+        const parsed = parseOpenAiSseChunk(line);
+        if (!parsed) continue;
+        if (parsed.error) throw new Error(parsed.error);
+        if (parsed.delta) {
+          content += parsed.delta;
+          onDelta(parsed.delta, content);
+        }
+      }
+    }
+
+    if (done) break;
+  }
+
+  if (buffer.trim()) {
+    const parsed = parseOpenAiSseChunk(buffer.trim());
+    if (parsed?.error) throw new Error(parsed.error);
+    if (parsed?.delta) {
+      content += parsed.delta;
+      onDelta(parsed.delta, content);
+    }
+  }
+
+  if (!content.trim()) {
+    throw new Error('Julia text stream completed without assistant content');
+  }
+
+  return {
+    role: 'assistant',
+    content,
+    createdAt: new Date().toISOString(),
+    source: 'julia-brain-text-stream',
+  };
+}
+
 module.exports = {
   DEFAULT_TEXT_API_URL,
   getTextApiUrl,
   sendTextMessage,
+  streamTextMessage,
 };
