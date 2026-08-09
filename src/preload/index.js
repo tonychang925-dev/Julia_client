@@ -1,6 +1,7 @@
-const { contextBridge } = require('electron');
+const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('juliaElectronV2', {
   mode: 'clean-shell',
-  ownsMediaPipeline: false
+  ownsMediaPipeline: false,
+  sendTextMessage: (text) => ipcRenderer.invoke('julia:text:send', { text })
 });

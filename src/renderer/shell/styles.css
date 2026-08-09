@@ -190,6 +190,11 @@ button, input { font: inherit; }
   background: rgba(114, 228, 192, .08);
 }
 .message.user .role { text-align: right; }
+.message.error .bubble {
+  border-color: rgba(255, 103, 103, .45);
+  background: rgba(255, 103, 103, .08);
+}
+.message[data-pending="true"] .bubble { color: var(--muted); }
 
 .composer {
   display: flex;

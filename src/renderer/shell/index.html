@@ -50,7 +50,7 @@
           </aside>
 
           <section class="conversation-panel">
-            <div class="thread">
+            <div id="conversationThread" class="thread">
               <div class="message assistant">
                 <div class="role">Julia</div>
                 <div class="bubble">
@@ -69,12 +69,12 @@
               </div>
             </div>
 
-            <div class="composer">
-              <button class="composer-plus" type="button" aria-label="Attach">+</button>
-              <input class="composer-input" placeholder="Message Julia..." disabled />
+            <form id="composerForm" class="composer">
+              <button class="composer-plus" type="button" aria-label="Attach" disabled>+</button>
+              <input id="composerInput" class="composer-input" placeholder="Message Julia..." autocomplete="off" />
               <button id="composerVoiceButton" class="composer-voice" type="button" aria-label="Switch to voice">🎙</button>
-              <button class="composer-send" type="button" disabled>↑</button>
-            </div>
+              <button id="composerSend" class="composer-send" type="submit" disabled>↑</button>
+            </form>
           </section>
         </section>
 
