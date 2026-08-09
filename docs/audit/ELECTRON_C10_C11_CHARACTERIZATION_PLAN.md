@@ -40,6 +40,10 @@ These describe current reality or enforce C-00 through C-06; they do not assume 
 | CHAR-10 | Failed Text turn | Optimistic record must not masquerade as canonical completed (currently expected to expose a gap) |
 | CHAR-11 | Barge-in | Media interruption does not rewrite completed canonical history |
 | CHAR-12 | Client cache removal | Core conversation remains authoritative and recoverable by ID |
+| CHAR-13 | Native request field boundary | No model/provider session/tools/persona/system/history fields leave Electron |
+| CHAR-14 | Capability-shaped natural language | Uses the same Julia-native turn path; Electron performs no semantic routing |
+| CHAR-15 | Preload capability surface | No generic MCP/tool execution or authorization bridge is exposed |
+| CHAR-16 | Provider-envelope isolation | OpenAI-shaped SSE decoding changes transport only, never Persona/context/tool policy |
 
 ## 3. C-10 implementation-impact checklist
 
