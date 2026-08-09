@@ -31,6 +31,27 @@ function buildConversationsApiUrl(brainEndpoint) {
   return new URL('/internal/v1/conversations', brainEndpoint || DEFAULT_BRAIN_ENDPOINT).toString();
 }
 
+function buildConversationDetailApiUrl(brainEndpoint, conversationId) {
+  const id = String(conversationId || '').trim();
+  if (!id) throw new Error('Conversation ID is required');
+  return new URL(
+    `/internal/v1/conversations/${encodeURIComponent(id)}`,
+    brainEndpoint || DEFAULT_BRAIN_ENDPOINT
+  ).toString();
+}
+
+async function getConversationDetail(conversationId, options = {}) {
+  const response = await fetch(buildConversationDetailApiUrl(options.brainEndpoint, conversationId), {
+    method: 'GET', headers: { Accept: 'application/json' },
+  });
+  if (!response.ok) {
+    const error = new Error(`Julia conversation detail failed: HTTP ${response.status}`);
+    error.status = response.status;
+    throw error;
+  }
+  return response.json();
+}
+
 function getTextApiUrl(input, options = {}) {
   if (process.env.JULIA_TEXT_API_URL) {
     return buildConversationTurnApiUrl(process.env.JULIA_TEXT_API_URL, input?.conversationId);
@@ -112,18 +133,18 @@ async function getConversationMessages(conversationId, options = {}) {
 
 async function ensureConversationMessages(conversationId, title = 'New Conversation', options = {}) {
   try {
-    return await getConversationMessages(conversationId, options);
+    await getConversationDetail(conversationId, options);
   } catch (error) {
     if (error.status !== 404) throw error;
-  }
-  const response = await fetch(buildConversationsApiUrl(options.brainEndpoint), {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-    body: JSON.stringify({ conversation_id: conversationId, title }),
-  });
-  if (!response.ok && response.status !== 409) {
-    const body = await response.text().catch(() => '');
-    throw new Error(`Julia conversation create failed: HTTP ${response.status}${body ? ` ${body.slice(0, 240)}` : ''}`);
+    const response = await fetch(buildConversationsApiUrl(options.brainEndpoint), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify({ conversation_id: conversationId, title }),
+    });
+    if (!response.ok && response.status !== 409) {
+      const body = await response.text().catch(() => '');
+      throw new Error(`Julia conversation create failed: HTTP ${response.status}${body ? ` ${body.slice(0, 240)}` : ''}`);
+    }
   }
   return getConversationMessages(conversationId, options);
 }
@@ -303,12 +324,14 @@ async function streamTextMessage(input, handlers = {}, options = {}) {
 module.exports = {
   DEFAULT_BRAIN_ENDPOINT,
   buildConversationMessagesApiUrl,
+  buildConversationDetailApiUrl,
   buildConversationsApiUrl,
   buildConversationTurnApiUrl,
   buildExternalTurnsApiUrl,
   buildTurnBody,
   getConversationTurnApiTemplate,
   getConversationMessages,
+  getConversationDetail,
   ensureConversationMessages,
   commitExternalTurns,
   getTextApiUrl,

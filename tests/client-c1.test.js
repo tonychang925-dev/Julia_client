@@ -7,9 +7,11 @@ const test = require('node:test');
 
 const {
   buildConversationMessagesApiUrl,
+  buildConversationDetailApiUrl,
   buildConversationTurnApiUrl,
   buildExternalTurnsApiUrl,
   commitExternalTurns,
+  ensureConversationMessages,
   buildTurnBody,
   getConversationMessages,
   getConversationTurnApiTemplate,
@@ -283,6 +285,53 @@ test('CLIENT-C1B-R3-TC02 surfaces Core conversation_advanced without local fallb
       }, { brainEndpoint: `http://127.0.0.1:${server.address().port}` }),
       (error) => error.code === 'conversation_advanced' && error.status === 409
     );
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test('CLIENT-C1B-R3-TC03 registers a local-only conversation before Voice bootstrap', async () => {
+  let exists = false;
+  const requests = [];
+  const server = http.createServer((request, response) => {
+    requests.push(`${request.method} ${request.url}`);
+    if (request.method === 'GET' && request.url === '/internal/v1/conversations/conv-local') {
+      response.writeHead(exists ? 200 : 404, { 'Content-Type': 'application/json' });
+      response.end(JSON.stringify(exists ? { conversation_id: 'conv-local' } : { error: 'not_found' }));
+      return;
+    }
+    if (request.method === 'POST' && request.url === '/internal/v1/conversations') {
+      let body = '';
+      request.on('data', (chunk) => { body += chunk; });
+      request.on('end', () => {
+        assert.deepEqual(JSON.parse(body), { conversation_id: 'conv-local', title: 'Local draft' });
+        exists = true;
+        response.writeHead(200, { 'Content-Type': 'application/json' });
+        response.end(JSON.stringify({ conversation_id: 'conv-local' }));
+      });
+      return;
+    }
+    if (request.method === 'GET' && request.url === '/internal/v1/conversations/conv-local/messages') {
+      response.writeHead(200, { 'Content-Type': 'application/json' });
+      response.end(JSON.stringify({ conversation_id: 'conv-local', title: 'Local draft', messages: [] }));
+      return;
+    }
+    response.writeHead(500); response.end();
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const endpoint = `http://127.0.0.1:${server.address().port}`;
+  try {
+    assert.equal(
+      buildConversationDetailApiUrl(endpoint, 'conv-local'),
+      `${endpoint}/internal/v1/conversations/conv-local`
+    );
+    const result = await ensureConversationMessages('conv-local', 'Local draft', { brainEndpoint: endpoint });
+    assert.equal(result.conversation_id, 'conv-local');
+    assert.deepEqual(requests, [
+      'GET /internal/v1/conversations/conv-local',
+      'POST /internal/v1/conversations',
+      'GET /internal/v1/conversations/conv-local/messages',
+    ]);
   } finally {
     await new Promise((resolve) => server.close(resolve));
   }
