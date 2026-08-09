@@ -71,6 +71,18 @@ ipcMain.handle('julia:conversation:add-message', async (_event, input) => {
   return getConversationStore().addMessage(input?.conversationId, input?.message || {});
 });
 
+ipcMain.handle('julia:conversation:rename', async (_event, input) => {
+  return getConversationStore().renameConversation(input?.conversationId, input?.title);
+});
+
+ipcMain.handle('julia:conversation:delete', async (_event, input) => {
+  return getConversationStore().deleteConversation(input?.conversationId);
+});
+
+ipcMain.handle('julia:conversation:search', async (_event, input) => {
+  return getConversationStore().searchConversations(input?.query);
+});
+
 app.whenReady().then(async () => {
   const webVoiceUrl = getWebVoiceUrl();
   console.log('[V2_WEB_VOICE_URL]', webVoiceUrl);

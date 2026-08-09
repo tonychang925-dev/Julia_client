@@ -17,5 +17,11 @@ contextBridge.exposeInMainWorld('juliaElectronV2', {
   addConversationMessage: (conversationId, message) => ipcRenderer.invoke('julia:conversation:add-message', {
     conversationId,
     message,
-  })
+  }),
+  renameConversation: (conversationId, title) => ipcRenderer.invoke('julia:conversation:rename', {
+    conversationId,
+    title,
+  }),
+  deleteConversation: (conversationId) => ipcRenderer.invoke('julia:conversation:delete', { conversationId }),
+  searchConversations: (query) => ipcRenderer.invoke('julia:conversation:search', { query })
 });

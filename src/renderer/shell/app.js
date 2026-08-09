@@ -15,6 +15,7 @@ const composerForm = document.getElementById('composerForm');
 const composerInput = document.getElementById('composerInput');
 const composerSend = document.getElementById('composerSend');
 const newChatButton = document.getElementById('newChatButton');
+const conversationSearch = document.getElementById('conversationSearch');
 const conversationList = document.getElementById('conversationList');
 const emptyConversationList = document.getElementById('emptyConversationList');
 
@@ -169,44 +170,123 @@ function formatConversationTime(value) {
   return `${Math.floor(hours / 24)}d ago`;
 }
 
+function startOfDay(date) {
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
+}
+
+function groupConversationByDate(value) {
+  const timestamp = new Date(value).getTime();
+  if (!Number.isFinite(timestamp)) return 'Earlier';
+
+  const today = startOfDay(new Date());
+  const itemDay = startOfDay(new Date(timestamp));
+  const diffDays = Math.floor((today - itemDay) / 86400000);
+  if (diffDays <= 0) return 'Today';
+  if (diffDays === 1) return 'Yesterday';
+  if (diffDays < 7) return 'This Week';
+  return 'Earlier';
+}
+
+function groupConversations(items) {
+  const groups = new Map([
+    ['Today', []],
+    ['Yesterday', []],
+    ['This Week', []],
+    ['Earlier', []],
+  ]);
+
+  for (const item of items) {
+    const group = groupConversationByDate(item.updated_at);
+    groups.get(group).push(item);
+  }
+
+  return [...groups.entries()].filter(([, groupItems]) => groupItems.length > 0);
+}
+
 function renderConversationList(items) {
+  const query = conversationSearch.value.trim();
   conversationList.replaceChildren();
+  const emptyText = emptyConversationList.querySelector('.empty-sidebar');
+  if (emptyText) {
+    emptyText.textContent = query ? 'No conversations match this search.' : 'No saved conversations yet.';
+  }
   emptyConversationList.classList.toggle('hidden', items.length > 0);
 
   if (items.length === 0) return;
 
-  const group = document.createElement('div');
-  group.className = 'conversation-group';
+  const groups = query ? [['Search Results', items]] : groupConversations(items);
 
-  const title = document.createElement('div');
-  title.className = 'group-title';
-  title.textContent = 'Conversations';
-  group.appendChild(title);
+  for (const [groupName, groupItems] of groups) {
+    const group = document.createElement('div');
+    group.className = 'conversation-group';
 
-  for (const item of items) {
-    const button = document.createElement('button');
-    button.className = 'conversation-item';
-    button.type = 'button';
-    button.dataset.conversationId = item.conversation_id;
-    button.classList.toggle('active', item.conversation_id === activeConversationId);
+    const title = document.createElement('div');
+    title.className = 'group-title';
+    title.textContent = groupName;
+    group.appendChild(title);
 
-    const itemTitle = document.createElement('div');
-    itemTitle.className = 'conversation-title';
-    itemTitle.textContent = item.title || 'New Conversation';
+    for (const item of groupItems) {
+      const row = document.createElement('div');
+      row.className = 'conversation-row';
 
-    const meta = document.createElement('div');
-    meta.className = 'conversation-meta';
-    meta.textContent = `${item.message_count || 0} messages · ${formatConversationTime(item.updated_at)}`;
+      const button = document.createElement('button');
+      button.className = 'conversation-item';
+      button.type = 'button';
+      button.dataset.conversationId = item.conversation_id;
+      button.classList.toggle('active', item.conversation_id === activeConversationId);
 
-    button.append(itemTitle, meta);
-    group.appendChild(button);
+      const itemTitle = document.createElement('div');
+      itemTitle.className = 'conversation-title';
+      itemTitle.textContent = item.title || 'New Conversation';
+
+      const meta = document.createElement('div');
+      meta.className = 'conversation-meta';
+      const matchText = item.match_count ? ` · ${item.match_count} match${item.match_count === 1 ? '' : 'es'}` : '';
+      meta.textContent = `${item.message_count || 0} messages · ${formatConversationTime(item.updated_at)}${matchText}`;
+
+      button.append(itemTitle, meta);
+
+      if (item.match_snippet && query) {
+        const snippet = document.createElement('div');
+        snippet.className = 'conversation-snippet';
+        snippet.textContent = item.match_snippet;
+        button.appendChild(snippet);
+      }
+
+      const actions = document.createElement('div');
+      actions.className = 'conversation-actions';
+
+      const rename = document.createElement('button');
+      rename.className = 'conversation-action';
+      rename.type = 'button';
+      rename.dataset.action = 'rename';
+      rename.dataset.conversationId = item.conversation_id;
+      rename.dataset.conversationTitle = item.title || 'New Conversation';
+      rename.title = 'Rename conversation';
+      rename.textContent = '✎';
+
+      const del = document.createElement('button');
+      del.className = 'conversation-action danger';
+      del.type = 'button';
+      del.dataset.action = 'delete';
+      del.dataset.conversationId = item.conversation_id;
+      del.title = 'Delete conversation';
+      del.textContent = '×';
+
+      actions.append(rename, del);
+      row.append(button, actions);
+      group.appendChild(row);
+    }
+
+    conversationList.appendChild(group);
   }
-
-  conversationList.appendChild(group);
 }
 
 async function refreshConversationList() {
-  const items = await textClient.listConversations();
+  const query = conversationSearch.value.trim();
+  const items = query
+    ? await textClient.searchConversations(query)
+    : await textClient.listConversations();
   renderConversationList(items);
 }
 
@@ -233,6 +313,30 @@ async function createNewConversation() {
   renderConversationMessages(conversation);
   await refreshConversationList();
   composerInput.focus();
+}
+
+async function renameConversation(conversationId, currentTitle) {
+  const nextTitle = window.prompt('Rename conversation', currentTitle || 'New Conversation');
+  if (nextTitle === null) return;
+  const trimmed = nextTitle.trim();
+  if (!trimmed) return;
+
+  const updated = await textClient.renameConversation(conversationId, trimmed);
+  if (updated.conversation_id === activeConversationId) {
+    renderConversationMessages(updated);
+  }
+  await refreshConversationList();
+}
+
+async function deleteConversation(conversationId) {
+  const ok = window.confirm('Delete this conversation? This cannot be undone.');
+  if (!ok) return;
+
+  const result = await textClient.deleteConversation(conversationId);
+  const next = result.current_conversation || await textClient.getCurrentConversation();
+  activeConversationId = next.conversation_id;
+  renderConversationMessages(next);
+  await refreshConversationList();
 }
 
 async function restoreConversationState() {
@@ -359,6 +463,19 @@ newChatButton.addEventListener('click', () => {
 });
 
 conversationList.addEventListener('click', (event) => {
+  const action = event.target.closest('.conversation-action');
+  if (action) {
+    const conversationId = action.dataset.conversationId;
+    const task = action.dataset.action === 'delete'
+      ? deleteConversation(conversationId)
+      : renameConversation(conversationId, action.dataset.conversationTitle);
+
+    task.catch((error) => {
+      console.error('[V2_CONVERSATION_ACTION_FAILED]', error);
+    });
+    return;
+  }
+
   const button = event.target.closest('.conversation-item');
   if (!button) return;
   openConversation(button.dataset.conversationId).catch((error) => {
@@ -382,6 +499,12 @@ composerForm.addEventListener('submit', (event) => {
 
 composerInput.addEventListener('input', () => {
   composerSend.disabled = sending || !composerInput.value.trim();
+});
+
+conversationSearch.addEventListener('input', () => {
+  refreshConversationList().catch((error) => {
+    console.error('[V2_CONVERSATION_SEARCH_FAILED]', error);
+  });
 });
 
 setMode('text');
