@@ -11,13 +11,25 @@ function isTrustedWebVoiceOrigin(origin, webVoiceUrl) {
   }
 }
 
+function isTrustedPermissionRequest(webContents, origin, details, webVoiceUrl) {
+  const candidates = [
+    origin,
+    details?.requestingUrl,
+    details?.securityOrigin,
+    details?.embeddingOrigin,
+    webContents?.getURL?.(),
+  ].filter(Boolean);
+
+  return candidates.some((candidate) => isTrustedWebVoiceOrigin(candidate, webVoiceUrl));
+}
+
 async function installPermissions(webVoiceUrl) {
   const ses = session.defaultSession;
 
-  ses.setPermissionCheckHandler((_wc, permission, origin, details) => {
+  ses.setPermissionCheckHandler((webContents, permission, origin, details) => {
     if (permission !== 'media') return false;
     if (details?.mediaType === 'video') return false;
-    return isTrustedWebVoiceOrigin(origin, webVoiceUrl);
+    return isTrustedPermissionRequest(webContents, origin, details, webVoiceUrl);
   });
 
   ses.setPermissionRequestHandler((webContents, permission, callback, details) => {
@@ -25,7 +37,7 @@ async function installPermissions(webVoiceUrl) {
       callback(false);
       return;
     }
-    callback(isTrustedWebVoiceOrigin(webContents.getURL(), webVoiceUrl));
+    callback(isTrustedPermissionRequest(webContents, undefined, details, webVoiceUrl));
   });
 
   const before = systemPreferences.getMediaAccessStatus('microphone');

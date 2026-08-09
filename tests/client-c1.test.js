@@ -1,0 +1,289 @@
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const http = require('node:http');
+const os = require('node:os');
+const path = require('node:path');
+const test = require('node:test');
+
+const {
+  buildConversationMessagesApiUrl,
+  buildConversationTurnApiUrl,
+  buildExternalTurnsApiUrl,
+  commitExternalTurns,
+  buildTurnBody,
+  getConversationMessages,
+  getConversationTurnApiTemplate,
+  normalizeTurnRequest,
+  parseOpenAiSseChunk,
+  sendTextMessage,
+  streamTextMessage,
+} = require('../src/main/text-client');
+const { ConversationStore } = require('../src/main/conversation-store');
+
+test('CLIENT-C1-TC01 builds the frozen Julia-native turn contract without history', () => {
+  const turn = normalizeTurnRequest({
+    conversationId: 'conv-A',
+    turnId: 'turn-001',
+    modality: 'text',
+    input: '前面我们聊到哪里？',
+  });
+
+  assert.equal(
+    buildConversationTurnApiUrl('http://127.0.0.1:18089', turn.conversationId),
+    'http://127.0.0.1:18089/internal/v1/conversations/conv-A/turns'
+  );
+  assert.equal(
+    buildConversationMessagesApiUrl('http://127.0.0.1:18089', turn.conversationId),
+    'http://127.0.0.1:18089/internal/v1/conversations/conv-A/messages'
+  );
+  assert.equal(
+    getConversationTurnApiTemplate({ brainEndpoint: 'http://127.0.0.1:18089' }),
+    'http://127.0.0.1:18089/internal/v1/conversations/%7Bconversation_id%7D/turns'
+  );
+  assert.deepEqual(buildTurnBody(turn, true), {
+    turn_id: 'turn-001',
+    modality: 'text',
+    input: '前面我们聊到哪里？',
+    stream: true,
+  });
+  assert.equal(Object.hasOwn(buildTurnBody(turn, true), 'messages'), false);
+  assert.equal(Object.hasOwn(buildTurnBody(turn, true), 'history'), false);
+  assert.equal(Object.hasOwn(buildTurnBody(turn, true), 'external_history'), false);
+});
+
+test('CLIENT-C1-TC02 rejects missing authority identifiers and unsupported modality', () => {
+  assert.throws(() => normalizeTurnRequest({ turnId: 'turn-1', input: 'hello' }), /Conversation ID/);
+  assert.throws(() => normalizeTurnRequest({ conversationId: 'conv-A', input: 'hello' }), /Turn ID/);
+  assert.throws(() => normalizeTurnRequest({
+    conversationId: 'conv-A', turnId: 'turn-1', modality: 'audio', input: 'hello',
+  }), /Unsupported modality/);
+});
+
+test('CLIENT-C1-TC03 surfaces failed SSE turns instead of rendering them as success', () => {
+  const parsed = parseOpenAiSseChunk(
+    'data: {"choices":[{"delta":{"content":"turn failed"},"finish_reason":"error"}]}'
+  );
+  assert.equal(parsed.error, 'turn failed');
+});
+
+test('CLIENT-C1-TC04 local UI cache is idempotent by conversation, turn, and role', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'julia-client-c1-'));
+  try {
+    const store = new ConversationStore(dir);
+    store.load();
+    const conversation = store.createConversation('Client cache');
+    store.addMessage(conversation.conversation_id, {
+      turn_id: 'turn-001', role: 'user', modality: 'text', content: 'first',
+    });
+    store.addMessage(conversation.conversation_id, {
+      turn_id: 'turn-001', role: 'user', modality: 'text', content: 'updated',
+    });
+    store.addMessage(conversation.conversation_id, {
+      turn_id: 'turn-001', role: 'assistant', modality: 'text', content: 'reply',
+    });
+
+    const restored = store.getConversation(conversation.conversation_id);
+    assert.equal(restored.messages.length, 2);
+    assert.equal(restored.messages[0].content, 'updated');
+    assert.equal(restored.messages[1].content, 'reply');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('CLIENT-C1-TC05 sends JSON and SSE turns through the Julia-native endpoint', async () => {
+  const observed = [];
+  const server = http.createServer((request, response) => {
+    let body = '';
+    request.setEncoding('utf8');
+    request.on('data', (chunk) => { body += chunk; });
+    request.on('end', () => {
+      const parsed = JSON.parse(body);
+      observed.push({ method: request.method, url: request.url, body: parsed });
+      if (parsed.stream) {
+        response.writeHead(200, { 'Content-Type': 'text/event-stream' });
+        response.end(
+          'data: {"choices":[{"delta":{"content":"Julia "},"finish_reason":null}]}\n\n'
+          + 'data: {"choices":[{"delta":{"content":"continues"},"finish_reason":null}]}\n\n'
+          + 'data: [DONE]\n\n'
+        );
+        return;
+      }
+      response.writeHead(200, { 'Content-Type': 'application/json' });
+      response.end(JSON.stringify({
+        conversation_id: 'conv-A',
+        turn_id: 'turn-json',
+        content: 'Julia remembers',
+        status: 'completed',
+      }));
+    });
+  });
+
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const endpoint = `http://127.0.0.1:${server.address().port}`;
+  try {
+    const jsonResult = await sendTextMessage({
+      conversationId: 'conv-A', turnId: 'turn-json', modality: 'text', input: 'remember',
+    }, { brainEndpoint: endpoint });
+    const deltas = [];
+    const streamResult = await streamTextMessage({
+      conversationId: 'conv-A', turnId: 'turn-sse', modality: 'text', input: 'continue',
+    }, { onDelta: (delta) => deltas.push(delta) }, { brainEndpoint: endpoint });
+
+    assert.equal(jsonResult.content, 'Julia remembers');
+    assert.equal(streamResult.content, 'Julia continues');
+    assert.deepEqual(deltas, ['Julia ', 'continues']);
+    assert.equal(observed.length, 2);
+    assert.equal(observed[0].url, '/internal/v1/conversations/conv-A/turns');
+    assert.deepEqual(observed[0].body, {
+      turn_id: 'turn-json', modality: 'text', input: 'remember', stream: false,
+    });
+    assert.deepEqual(observed[1].body, {
+      turn_id: 'turn-sse', modality: 'text', input: 'continue', stream: true,
+    });
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test('CLIENT-C1B-TC01 fetches only completed canonical messages', async () => {
+  const server = http.createServer((_request, response) => {
+    response.writeHead(200, { 'Content-Type': 'application/json' });
+    response.end(JSON.stringify({
+      conversation_id: 'conv-voice',
+      title: 'Voice continuity',
+      messages: [
+        {
+          message_id: 'msg-user', conversation_id: 'conv-voice', turn_id: 'v1',
+          role: 'user', modality: 'voice', content: '代号是什么？', status: 'completed',
+          created_at: '2026-08-09T15:00:00+08:00',
+        },
+        {
+          message_id: 'msg-pending', conversation_id: 'conv-voice', turn_id: 'v2',
+          role: 'assistant', modality: 'voice', content: 'pending', status: 'pending',
+          created_at: '2026-08-09T15:00:01+08:00',
+        },
+      ],
+    }));
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  try {
+    const result = await getConversationMessages('conv-voice', {
+      brainEndpoint: `http://127.0.0.1:${server.address().port}`,
+    });
+    assert.equal(result.messages.length, 1);
+    assert.equal(result.messages[0].message_id, 'msg-user');
+    assert.equal(result.messages[0].modality, 'voice');
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test('CLIENT-C1B-TC02 canonical identity replaces optimistic cache entries', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'julia-client-c1b-'));
+  try {
+    const store = new ConversationStore(dir);
+    store.load();
+    const conversation = store.createConversation('Voice continuity');
+    store.addMessage(conversation.conversation_id, {
+      message_id: 'local-msg', turn_id: 'voice-turn-1', role: 'user',
+      modality: 'voice', content: 'local transcript', status: 'completed',
+    });
+
+    const result = store.reconcileCanonicalMessages(conversation.conversation_id, {
+      title: 'Voice continuity',
+      messages: [
+        {
+          message_id: 'canonical-msg', conversation_id: conversation.conversation_id,
+          turn_id: 'voice-turn-1', role: 'user', modality: 'voice',
+          content: 'canonical transcript', status: 'completed',
+          created_at: '2026-08-09T15:03:26.913714+08:00',
+        },
+        {
+          message_id: 'canonical-reply', conversation_id: conversation.conversation_id,
+          turn_id: 'voice-turn-1', role: 'assistant', modality: 'voice',
+          content: 'canonical reply', status: 'completed',
+          created_at: '2026-08-09T15:03:27.913714+08:00',
+        },
+      ],
+    });
+
+    assert.equal(result.conversation.messages.length, 2);
+    assert.equal(result.conversation.messages[0].message_id, 'canonical-msg');
+    assert.equal(result.conversation.messages[0].content, 'canonical transcript');
+    assert.equal(result.conversation.messages[1].message_id, 'canonical-reply');
+    assert.equal(result.reconciliation.inserted, 1);
+    assert.equal(result.reconciliation.updated, 1);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('CLIENT-C1B-R3-TC01 commits Voice delta through the frozen external-turns contract', async () => {
+  let observed = null;
+  const server = http.createServer((request, response) => {
+    let body = '';
+    request.setEncoding('utf8');
+    request.on('data', (chunk) => { body += chunk; });
+    request.on('end', () => {
+      observed = { url: request.url, body: JSON.parse(body) };
+      response.writeHead(200, { 'Content-Type': 'application/json' });
+      response.end(JSON.stringify({
+        conversation_id: 'conv-A',
+        appended_turn_ids: ['voice:vws:0001'],
+        skipped_turn_ids: [],
+        message_count: 4,
+        last_message_id: 'msg-4',
+      }));
+    });
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const endpoint = `http://127.0.0.1:${server.address().port}`;
+  try {
+    assert.equal(
+      buildExternalTurnsApiUrl(endpoint, 'conv-A'),
+      `${endpoint}/internal/v1/conversations/conv-A/external-turns`
+    );
+    const result = await commitExternalTurns({
+      conversationId: 'conv-A',
+      voiceSessionId: 'vws',
+      baseLastMessageId: 'msg-2',
+      turns: [{
+        turn_id: 'voice:vws:0001', modality: 'voice', user_content: '问题',
+        assistant_content: '回答', assistant_status: 'completed',
+      }],
+    }, { brainEndpoint: endpoint });
+    assert.deepEqual(result.appended_turn_ids, ['voice:vws:0001']);
+    assert.equal(observed.url, '/internal/v1/conversations/conv-A/external-turns');
+    assert.deepEqual(observed.body, {
+      source: 'voice-s2s',
+      source_session_id: 'vws',
+      base_last_message_id: 'msg-2',
+      turns: [{
+        turn_id: 'voice:vws:0001', modality: 'voice', user_content: '问题',
+        assistant_content: '回答', assistant_status: 'completed',
+      }],
+    });
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test('CLIENT-C1B-R3-TC02 surfaces Core conversation_advanced without local fallback', async () => {
+  const server = http.createServer((_request, response) => {
+    response.writeHead(409, { 'Content-Type': 'application/json' });
+    response.end(JSON.stringify({ code: 'conversation_advanced', error: 'stale base cursor' }));
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  try {
+    await assert.rejects(
+      commitExternalTurns({
+        conversationId: 'conv-A', voiceSessionId: 'vws', baseLastMessageId: 'old',
+        turns: [{ turn_id: 'voice:vws:0001', modality: 'voice', user_content: 'question' }],
+      }, { brainEndpoint: `http://127.0.0.1:${server.address().port}` }),
+      (error) => error.code === 'conversation_advanced' && error.status === 409
+    );
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});

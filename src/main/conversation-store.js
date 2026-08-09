@@ -4,6 +4,10 @@ const path = require('path');
 const STORE_VERSION = 1;
 const DEFAULT_FILE_NAME = 'julia-conversations-v1.json';
 
+// UI cache only. Julia Core ConversationRuntime is the sole authority for
+// cognitive history and conversation continuity. Nothing in this file is sent
+// to Julia as prompt/history/context.
+
 function nowIso() {
   return new Date().toISOString();
 }
@@ -231,6 +235,17 @@ class ConversationStore {
       throw new Error('Message content is empty');
     }
 
+    const existing = conversation.messages.find((item) => (
+      item.turn_id === normalized.turn_id && item.role === normalized.role
+    ));
+    if (existing) {
+      Object.assign(existing, normalized, { message_id: existing.message_id });
+      conversation.updated_at = timestamp;
+      this.state.currentConversationId = conversation.conversation_id;
+      this.save();
+      return existing;
+    }
+
     conversation.messages.push(normalized);
     conversation.updated_at = timestamp;
     if (!conversation.title_updated_by_user && conversation.title === 'New Conversation' && normalized.role === 'user') {
@@ -239,6 +254,79 @@ class ConversationStore {
     this.state.currentConversationId = conversation.conversation_id;
     this.save();
     return normalized;
+  }
+
+  reconcileCanonicalMessages(conversationId, canonical = {}) {
+    this.load();
+    let conversation = this.getConversation(conversationId);
+    if (!conversation) {
+      const timestamp = nowIso();
+      conversation = {
+        conversation_id: conversationId,
+        title: canonical.title || 'New Conversation',
+        title_updated_by_user: false,
+        created_at: timestamp,
+        updated_at: timestamp,
+        messages: [],
+      };
+      this.state.conversations.unshift(conversation);
+    }
+
+    let inserted = 0;
+    let updated = 0;
+    const canonicalMessages = Array.isArray(canonical.messages) ? canonical.messages : [];
+
+    for (const message of canonicalMessages) {
+      if (
+        !message
+        || message.status !== 'completed'
+        || !['user', 'assistant'].includes(message.role)
+        || !String(message.message_id || '').trim()
+        || !String(message.turn_id || '').trim()
+        || !String(message.content || '').trim()
+      ) continue;
+
+      const normalized = {
+        message_id: String(message.message_id),
+        conversation_id: conversationId,
+        turn_id: String(message.turn_id),
+        role: message.role,
+        modality: message.modality === 'voice' ? 'voice' : 'text',
+        content: String(message.content),
+        status: 'completed',
+        created_at: message.created_at || nowIso(),
+        metadata: { source: 'julia-core-canonical' },
+      };
+
+      const index = conversation.messages.findIndex((item) => (
+        item.message_id === normalized.message_id
+        || (item.turn_id === normalized.turn_id && item.role === normalized.role)
+      ));
+      if (index >= 0) {
+        conversation.messages[index] = normalized;
+        updated += 1;
+      } else {
+        conversation.messages.push(normalized);
+        inserted += 1;
+      }
+    }
+
+    conversation.messages.sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)));
+    if (canonical.title && canonical.title !== 'New Conversation') {
+      conversation.title = canonical.title;
+    }
+    conversation.updated_at = conversation.messages.at(-1)?.created_at || conversation.updated_at || nowIso();
+    this.state.currentConversationId = conversationId;
+    this.save();
+
+    return {
+      conversation,
+      reconciliation: {
+        canonical_count: canonicalMessages.length,
+        inserted,
+        updated,
+      },
+    };
   }
 }
 
