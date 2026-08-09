@@ -31,42 +31,21 @@
       <main class="surface-root">
         <section id="textSurface" class="surface text-surface" aria-label="Text mode">
           <aside class="sidebar">
-            <button class="new-chat-button" type="button">+ New Chat</button>
+            <button id="newChatButton" class="new-chat-button" type="button">+ New Chat</button>
             <label class="search-label" for="conversationSearch">Search</label>
-            <input id="conversationSearch" class="search-input" placeholder="Search conversations" />
+            <input id="conversationSearch" class="search-input" placeholder="Search conversations" disabled />
 
-            <div class="conversation-group">
-              <div class="group-title">Today</div>
-              <button class="conversation-item active" type="button">Electron V2 baseline</button>
-              <button class="conversation-item" type="button">Julia Desktop UI</button>
+            <div id="conversationList" class="conversation-list">
             </div>
 
-            <div class="conversation-group muted">
-              <div class="group-title">Soon</div>
-              <button class="conversation-item" type="button">Persistence</button>
-              <button class="conversation-item" type="button">History / Search</button>
-              <button class="conversation-item" type="button">Settings</button>
+            <div id="emptyConversationList" class="conversation-group muted">
+              <div class="group-title">Today</div>
+              <div class="empty-sidebar">No saved conversations yet.</div>
             </div>
           </aside>
 
           <section class="conversation-panel">
             <div id="conversationThread" class="thread">
-              <div class="message assistant">
-                <div class="role">Julia</div>
-                <div class="bubble">
-                  Electron V2 baseline is confirmed. This shell is now the application layer above the validated Voice path.
-                </div>
-              </div>
-              <div class="message user">
-                <div class="role">Tony</div>
-                <div class="bubble">Next: build Text Mode, then migrate conversation persistence.</div>
-              </div>
-              <div class="message assistant">
-                <div class="role">Julia</div>
-                <div class="bubble">
-                  Voice remains delegated to the existing Golden HF Web Voice. Electron still owns no PCM, VAD, STT, TTS, or playback pipeline.
-                </div>
-              </div>
             </div>
 
             <form id="composerForm" class="composer">

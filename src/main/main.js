@@ -3,9 +3,17 @@ const { getWebVoiceUrl, isAllowedLocalDevCertUrl } = require('./config');
 const { installPermissions } = require('./permissions');
 const { createMainWindow } = require('./window');
 const { sendTextMessage, streamTextMessage, getTextApiUrl } = require('./text-client');
+const { createConversationStore } = require('./conversation-store');
 
 let mainWindow = null;
+let conversationStore = null;
 
+function getConversationStore() {
+  if (!conversationStore) {
+    throw new Error('Conversation store is not ready');
+  }
+  return conversationStore;
+}
 
 ipcMain.handle('julia:text:send', async (_event, input) => {
   return sendTextMessage(input);
@@ -43,10 +51,33 @@ ipcMain.handle('julia:text:stream', async (event, input) => {
   }
 });
 
+ipcMain.handle('julia:conversation:list', async () => {
+  return getConversationStore().listConversations();
+});
+
+ipcMain.handle('julia:conversation:current', async () => {
+  return getConversationStore().getCurrentConversation();
+});
+
+ipcMain.handle('julia:conversation:create', async (_event, input) => {
+  return getConversationStore().createConversation(input?.title || 'New Conversation');
+});
+
+ipcMain.handle('julia:conversation:open', async (_event, input) => {
+  return getConversationStore().setCurrentConversation(input?.conversationId);
+});
+
+ipcMain.handle('julia:conversation:add-message', async (_event, input) => {
+  return getConversationStore().addMessage(input?.conversationId, input?.message || {});
+});
+
 app.whenReady().then(async () => {
   const webVoiceUrl = getWebVoiceUrl();
   console.log('[V2_WEB_VOICE_URL]', webVoiceUrl);
   console.log('[V2_TEXT_API_URL]', getTextApiUrl());
+  conversationStore = createConversationStore(app.getPath('userData'));
+  conversationStore.load();
+  console.log('[V2_CONVERSATION_STORE]', conversationStore.filePath);
 
   app.on('certificate-error', (event, webContents, url, error, certificate, callback) => {
     const allowLocalDev = process.env.JULIA_ALLOW_INSECURE_LOCALHOST_CERT === '1';

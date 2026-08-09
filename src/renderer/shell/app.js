@@ -14,9 +14,13 @@ const thread = document.getElementById('conversationThread');
 const composerForm = document.getElementById('composerForm');
 const composerInput = document.getElementById('composerInput');
 const composerSend = document.getElementById('composerSend');
+const newChatButton = document.getElementById('newChatButton');
+const conversationList = document.getElementById('conversationList');
+const emptyConversationList = document.getElementById('emptyConversationList');
 
 const textClient = window.juliaElectronV2;
 let sending = false;
+let activeConversationId = null;
 const activeTextStreams = new Map();
 
 voiceUrlLabel.textContent = webVoiceUrl;
@@ -124,11 +128,118 @@ function createMessage(role, content, options = {}) {
   return message;
 }
 
+function createWelcomeMessage() {
+  const welcome = document.createElement('div');
+  welcome.className = 'empty-thread';
+  welcome.textContent = 'Start a new conversation with Julia.';
+  return welcome;
+}
+
 function appendMessage(role, content, options) {
   const message = createMessage(role, content, options);
   thread.appendChild(message);
   thread.scrollTop = thread.scrollHeight;
   return message;
+}
+
+function renderConversationMessages(conversation) {
+  thread.replaceChildren();
+
+  const messages = conversation?.messages || [];
+  if (messages.length === 0) {
+    thread.appendChild(createWelcomeMessage());
+    return;
+  }
+
+  for (const message of messages) {
+    appendMessage(message.role, message.content);
+  }
+}
+
+function formatConversationTime(value) {
+  const timestamp = new Date(value).getTime();
+  if (!Number.isFinite(timestamp)) return '';
+
+  const diff = Date.now() - timestamp;
+  const minutes = Math.floor(diff / 60000);
+  if (minutes < 1) return 'just now';
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  return `${Math.floor(hours / 24)}d ago`;
+}
+
+function renderConversationList(items) {
+  conversationList.replaceChildren();
+  emptyConversationList.classList.toggle('hidden', items.length > 0);
+
+  if (items.length === 0) return;
+
+  const group = document.createElement('div');
+  group.className = 'conversation-group';
+
+  const title = document.createElement('div');
+  title.className = 'group-title';
+  title.textContent = 'Conversations';
+  group.appendChild(title);
+
+  for (const item of items) {
+    const button = document.createElement('button');
+    button.className = 'conversation-item';
+    button.type = 'button';
+    button.dataset.conversationId = item.conversation_id;
+    button.classList.toggle('active', item.conversation_id === activeConversationId);
+
+    const itemTitle = document.createElement('div');
+    itemTitle.className = 'conversation-title';
+    itemTitle.textContent = item.title || 'New Conversation';
+
+    const meta = document.createElement('div');
+    meta.className = 'conversation-meta';
+    meta.textContent = `${item.message_count || 0} messages · ${formatConversationTime(item.updated_at)}`;
+
+    button.append(itemTitle, meta);
+    group.appendChild(button);
+  }
+
+  conversationList.appendChild(group);
+}
+
+async function refreshConversationList() {
+  const items = await textClient.listConversations();
+  renderConversationList(items);
+}
+
+async function ensureActiveConversation() {
+  if (activeConversationId) return activeConversationId;
+
+  const conversation = await textClient.getCurrentConversation();
+  activeConversationId = conversation.conversation_id;
+  renderConversationMessages(conversation);
+  await refreshConversationList();
+  return activeConversationId;
+}
+
+async function openConversation(conversationId) {
+  const conversation = await textClient.openConversation(conversationId);
+  activeConversationId = conversation.conversation_id;
+  renderConversationMessages(conversation);
+  await refreshConversationList();
+}
+
+async function createNewConversation() {
+  const conversation = await textClient.createConversation('New Conversation');
+  activeConversationId = conversation.conversation_id;
+  renderConversationMessages(conversation);
+  await refreshConversationList();
+  composerInput.focus();
+}
+
+async function restoreConversationState() {
+  const conversation = await textClient.getCurrentConversation();
+  activeConversationId = conversation.conversation_id;
+  renderConversationMessages(conversation);
+  await refreshConversationList();
 }
 
 function setComposerBusy(isBusy) {
@@ -197,19 +308,38 @@ async function sendComposerMessage() {
 
   const requestId = createRequestId();
   composerInput.value = '';
-  appendMessage('user', text);
+  const userMessage = appendMessage('user', text);
+  thread.querySelector('.empty-thread')?.remove();
   const pending = appendMessage('assistant', 'Julia is thinking…', { pending: true });
   activeTextStreams.set(requestId, { message: pending, content: '' });
   setComposerBusy(true);
 
   try {
+    const conversationId = await ensureActiveConversation();
+    const userRecord = await textClient.addConversationMessage(conversationId, {
+      turn_id: requestId,
+      role: 'user',
+      modality: 'text',
+      content: text,
+    });
+    activeConversationId = userRecord.conversation_id;
+    await refreshConversationList();
+
     const response = await textClient.streamTextMessage(requestId, text);
     if (activeTextStreams.has(requestId)) {
       setMessageContent(pending, response.content);
       activeTextStreams.delete(requestId);
     }
+    await textClient.addConversationMessage(activeConversationId, {
+      turn_id: requestId,
+      role: 'assistant',
+      modality: 'text',
+      content: response.content,
+    });
+    await refreshConversationList();
     delete pending.dataset.pending;
   } catch (error) {
+    userMessage.classList.toggle('error', !activeConversationId);
     if (activeTextStreams.has(requestId)) {
       setMessageContent(pending, `Text mode request failed: ${error.message}`);
       pending.classList.add('error');
@@ -221,6 +351,20 @@ async function sendComposerMessage() {
     composerInput.focus();
   }
 }
+
+newChatButton.addEventListener('click', () => {
+  createNewConversation().catch((error) => {
+    console.error('[V2_CONVERSATION_CREATE_FAILED]', error);
+  });
+});
+
+conversationList.addEventListener('click', (event) => {
+  const button = event.target.closest('.conversation-item');
+  if (!button) return;
+  openConversation(button.dataset.conversationId).catch((error) => {
+    console.error('[V2_CONVERSATION_OPEN_FAILED]', error);
+  });
+});
 
 textModeButton.addEventListener('click', () => setMode('text'));
 voiceModeButton.addEventListener('click', () => setMode('voice'));
@@ -243,3 +387,8 @@ composerInput.addEventListener('input', () => {
 setMode('text');
 composerInput.disabled = false;
 composerSend.disabled = true;
+restoreConversationState().catch((error) => {
+  thread.replaceChildren();
+  const message = appendMessage('assistant', `Conversation restore failed: ${error.message}`);
+  message.classList.add('error');
+});
