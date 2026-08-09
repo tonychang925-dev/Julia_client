@@ -2,7 +2,8 @@
 
 **Date:** 2026-08-10
 **Mode:** Test preparation only
-**Constraint:** Do not invent a future API before C-10/C-11 freeze.
+**Contract status:** C-10 `2d99293` and C-11 `29b2198` are frozen.
+**Constraint:** Characterization may now derive deterministic semantics from the frozen contracts; production patches remain a separate gate.
 
 ## 1. Existing baseline
 
