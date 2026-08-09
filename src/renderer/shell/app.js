@@ -9,8 +9,11 @@ const textModeButton = document.getElementById('textModeButton');
 const voiceModeButton = document.getElementById('voiceModeButton');
 const composerVoiceButton = document.getElementById('composerVoiceButton');
 const backToTextButton = document.getElementById('backToTextButton');
-const openVoiceButton = document.getElementById('openVoiceButton');
 const voiceUrlLabel = document.getElementById('voiceUrlLabel');
+const voiceFrame = document.getElementById('voiceFrame');
+const voiceLifecycleStatus = document.getElementById('voiceLifecycleStatus');
+const resumeVoiceButton = document.getElementById('resumeVoiceButton');
+const pauseVoiceButton = document.getElementById('pauseVoiceButton');
 const thread = document.getElementById('conversationThread');
 const composerForm = document.getElementById('composerForm');
 const composerInput = document.getElementById('composerInput');
@@ -42,18 +45,172 @@ const textClient = window.juliaElectronV2;
 let sending = false;
 let activeConversationId = null;
 let currentSettings = null;
+let currentMode = 'text';
+let voiceLoaded = false;
+let voiceFrameReady = false;
+let voiceLoadPromise = null;
+let voiceLifecycleState = 'paused';
 const activeTextStreams = new Map();
+const pendingVoiceCommands = new Map();
 
 voiceUrlLabel.textContent = webVoiceUrl;
 
-function setMode(mode) {
+function showSurface(mode) {
   const isVoice = mode === 'voice';
+  currentMode = mode;
   app.dataset.mode = mode;
   textSurface.classList.toggle('hidden', isVoice);
   voiceSurface.classList.toggle('hidden', !isVoice);
   textModeButton.classList.toggle('active', !isVoice);
   voiceModeButton.classList.toggle('active', isVoice);
 }
+
+function setVoiceLifecycleStatus(message, state = voiceLifecycleState) {
+  voiceLifecycleState = state;
+  voiceLifecycleStatus.textContent = message;
+  voiceSurface.dataset.voiceState = state;
+}
+
+function ensureVoiceLoaded() {
+  if (voiceLoaded) return;
+  voiceLoadPromise = new Promise((resolve) => {
+    const onLoad = () => {
+      voiceFrameReady = true;
+      voiceFrame.removeEventListener('load', onLoad);
+      resolve();
+    };
+    voiceFrame.addEventListener('load', onLoad);
+  });
+  voiceFrame.src = webVoiceUrl;
+  voiceLoaded = true;
+}
+
+async function waitForVoiceFrameReady() {
+  ensureVoiceLoaded();
+  if (voiceFrameReady) return;
+  await Promise.race([
+    voiceLoadPromise,
+    new Promise((resolve) => setTimeout(resolve, 3000)),
+  ]);
+}
+
+function getVoiceTargetOrigin() {
+  return new URL(webVoiceUrl).origin;
+}
+
+function resolveVoiceCommand(requestId, payload) {
+  const pending = pendingVoiceCommands.get(requestId);
+  if (!pending) return;
+  clearTimeout(pending.timeout);
+  pendingVoiceCommands.delete(requestId);
+  pending.resolve(payload);
+}
+
+function isVoiceLifecycleMessage(payload) {
+  if (!payload || typeof payload !== 'object') return false;
+  const source = String(payload.source || payload.app || '');
+  const type = String(payload.type || payload.event || '');
+  return source.includes('julia') && (payload.requestId || type.includes('voice') || type.includes('lifecycle'));
+}
+
+window.addEventListener('message', (event) => {
+  if (event.origin !== getVoiceTargetOrigin()) return;
+  const payload = event.data;
+  if (!isVoiceLifecycleMessage(payload)) return;
+
+  if (payload.requestId) {
+    resolveVoiceCommand(payload.requestId, payload);
+  }
+
+  if (payload.status || payload.state) {
+    const state = payload.status || payload.state;
+    setVoiceLifecycleStatus(`Voice lifecycle: ${state}`, String(state).toLowerCase());
+  }
+});
+
+async function sendVoiceLifecycleCommand(action, timeoutMs = 7000) {
+  ensureVoiceLoaded();
+  await waitForVoiceFrameReady();
+  const requestId = createRequestId();
+  const message = {
+    source: 'julia-electron-v2',
+    type: 'voice:lifecycle-command',
+    requestId,
+    action,
+  };
+
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      pendingVoiceCommands.delete(requestId);
+      reject(new Error(`Voice lifecycle command timed out: ${action}`));
+    }, timeoutMs);
+
+    pendingVoiceCommands.set(requestId, { resolve, reject, timeout });
+    voiceFrame.contentWindow.postMessage(message, getVoiceTargetOrigin());
+  });
+}
+
+function isPauseConfirmed(result) {
+  const status = String(result?.status || result?.state || '').toLowerCase();
+  return result?.ok === true || result?.micCapturePaused === true || ['paused', 'released'].includes(status);
+}
+
+async function pauseVoiceCapture(reason = 'text') {
+  if (!voiceLoaded) {
+    setVoiceLifecycleStatus('Voice surface ready. Microphone is off.', 'paused');
+    return { ok: true, skipped: true };
+  }
+
+  setVoiceLifecycleStatus('Releasing microphone…', 'pausing');
+  const result = await sendVoiceLifecycleCommand('pauseMicCapture');
+  if (!isPauseConfirmed(result)) {
+    throw new Error(result?.error || 'Voice did not confirm microphone release');
+  }
+  setVoiceLifecycleStatus(`Microphone released for ${reason}.`, 'paused');
+  return result;
+}
+
+async function resumeVoiceCapture() {
+  ensureVoiceLoaded();
+  showSurface('voice');
+  setVoiceLifecycleStatus('Starting microphone…', 'resuming');
+  const result = await sendVoiceLifecycleCommand('resumeMicCapture');
+  setVoiceLifecycleStatus('Voice listening.', 'listening');
+  return result;
+}
+
+async function switchToTextMode(reason = 'text') {
+  try {
+    await pauseVoiceCapture(reason);
+    showSurface('text');
+  } catch (error) {
+    showSurface('voice');
+    setVoiceLifecycleStatus(`Microphone release failed: ${error.message}`, 'error');
+    throw error;
+  }
+}
+
+async function switchToVoiceMode({ resume = true } = {}) {
+  ensureVoiceLoaded();
+  showSurface('voice');
+  if (resume) {
+    await resumeVoiceCapture();
+  } else {
+    setVoiceLifecycleStatus('Voice surface ready. Microphone is off.', 'paused');
+  }
+}
+
+async function prepareAppHidden(reason = 'hidden') {
+  if (currentMode !== 'voice') return { ok: true, mode: currentMode };
+  try {
+    await pauseVoiceCapture(reason);
+    return { ok: true, mode: currentMode, voiceLifecycleState };
+  } catch (error) {
+    return { ok: false, error: error.message, mode: currentMode, voiceLifecycleState };
+  }
+}
+
+window.__juliaPrepareForAppHidden = prepareAppHidden;
 
 function setSettingsError(message) {
   settingsError.textContent = message || '';
@@ -119,7 +276,12 @@ async function refreshBrainStatus() {
 async function restoreSettingsState() {
   const settings = await textClient.getSettings();
   populateSettings(settings);
-  setMode(settings.defaultMode || initialDefaultMode);
+  const mode = settings.defaultMode || initialDefaultMode;
+  if (mode === 'voice') {
+    await switchToVoiceMode({ resume: false });
+  } else {
+    showSurface('text');
+  }
   await refreshBrainStatus();
 }
 
@@ -571,13 +733,37 @@ conversationList.addEventListener('click', (event) => {
   });
 });
 
-textModeButton.addEventListener('click', () => setMode('text'));
-voiceModeButton.addEventListener('click', () => setMode('voice'));
-composerVoiceButton.addEventListener('click', () => setMode('voice'));
-backToTextButton.addEventListener('click', () => setMode('text'));
+textModeButton.addEventListener('click', () => {
+  switchToTextMode('text').catch((error) => {
+    console.error('[V2_MODE_TEXT_FAILED]', error);
+  });
+});
+voiceModeButton.addEventListener('click', () => {
+  switchToVoiceMode({ resume: true }).catch((error) => {
+    console.error('[V2_MODE_VOICE_FAILED]', error);
+  });
+});
+composerVoiceButton.addEventListener('click', () => {
+  switchToVoiceMode({ resume: true }).catch((error) => {
+    console.error('[V2_MODE_VOICE_FAILED]', error);
+  });
+});
+backToTextButton.addEventListener('click', () => {
+  switchToTextMode('text').catch((error) => {
+    console.error('[V2_MODE_TEXT_FAILED]', error);
+  });
+});
 
-openVoiceButton.addEventListener('click', () => {
-  window.location.href = webVoiceUrl;
+resumeVoiceButton.addEventListener('click', () => {
+  resumeVoiceCapture().catch((error) => {
+    setVoiceLifecycleStatus(`Voice start failed: ${error.message}`, 'error');
+  });
+});
+
+pauseVoiceButton.addEventListener('click', () => {
+  pauseVoiceCapture('manual').catch((error) => {
+    setVoiceLifecycleStatus(`Mic release failed: ${error.message}`, 'error');
+  });
 });
 
 composerForm.addEventListener('submit', (event) => {
@@ -620,7 +806,13 @@ settingsSaveButton.addEventListener('click', () => {
   textClient.updateSettings(readSettingsForm())
     .then((settings) => {
       populateSettings(settings);
-      setMode(settings.defaultMode || 'text');
+      if (settings.defaultMode === 'voice') {
+        return switchToVoiceMode({ resume: false }).then(() => settings);
+      }
+      showSurface('text');
+      return settings;
+    })
+    .then(() => {
       closeSettingsPanel();
       return refreshBrainStatus();
     })
@@ -629,7 +821,13 @@ settingsSaveButton.addEventListener('click', () => {
     });
 });
 
-setMode(initialDefaultMode === 'voice' ? 'voice' : 'text');
+if (initialDefaultMode === 'voice') {
+  switchToVoiceMode({ resume: false }).catch((error) => {
+    setVoiceLifecycleStatus(`Voice init failed: ${error.message}`, 'error');
+  });
+} else {
+  showSurface('text');
+}
 composerInput.disabled = false;
 composerSend.disabled = true;
 restoreSettingsState().catch((error) => {

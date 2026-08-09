@@ -61,15 +61,41 @@ function showMainWindow() {
   mainWindow.focus();
 }
 
-function hideMainWindow() {
-  if (mainWindow && !mainWindow.isDestroyed()) {
-    persistWindowState();
-    mainWindow.hide();
+async function prepareRendererForHidden(reason) {
+  if (!mainWindow || mainWindow.isDestroyed()) return { ok: true };
+  try {
+    const result = await Promise.race([
+      mainWindow.webContents.executeJavaScript(
+        `window.__juliaPrepareForAppHidden && window.__juliaPrepareForAppHidden(${JSON.stringify(reason)})`,
+        true
+      ),
+      new Promise((resolve) => setTimeout(() => resolve({ ok: false, error: 'prepare hide timeout' }), 7000)),
+    ]);
+    return result || { ok: true, skipped: true };
+  } catch (error) {
+    return { ok: false, error: error.message };
   }
 }
 
+async function hideMainWindow(reason = 'hide') {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    persistWindowState();
+    const result = await prepareRendererForHidden(reason);
+    if (!result?.ok) {
+      console.warn('[V2_HIDE_BLOCKED]', result);
+      return { visible: true, blocked: true, error: result?.error || 'Voice lifecycle did not confirm mic release' };
+    }
+    mainWindow.hide();
+  }
+  return { visible: false };
+}
+
 function toggleMainWindow() {
-  if (mainWindow?.isVisible()) hideMainWindow();
+  if (mainWindow?.isVisible()) {
+    hideMainWindow('shortcut').catch((error) => {
+      console.warn('[V2_HIDE_FAILED]', error.message);
+    });
+  }
   else showMainWindow();
 }
 
@@ -101,7 +127,14 @@ function updateTray() {
 
   tray.setContextMenu(Menu.buildFromTemplate([
     { label: 'Show Julia', click: showMainWindow },
-    { label: 'Hide Julia', click: hideMainWindow },
+    {
+      label: 'Hide Julia',
+      click: () => {
+        hideMainWindow('tray').catch((error) => {
+          console.warn('[V2_TRAY_HIDE_FAILED]', error.message);
+        });
+      },
+    },
     { type: 'separator' },
     {
       label: 'Quit Julia',
@@ -142,7 +175,9 @@ function attachWindowLifecycle(win) {
     const settings = getSettings();
     if (!isQuitting && settings.closeBehavior === 'tray' && settings.trayEnabled) {
       event.preventDefault();
-      win.hide();
+      hideMainWindow('close').catch((error) => {
+        console.warn('[V2_CLOSE_HIDE_FAILED]', error.message);
+      });
     }
   });
 
@@ -246,8 +281,7 @@ ipcMain.handle('julia:app:show', async () => {
 });
 
 ipcMain.handle('julia:app:hide', async () => {
-  hideMainWindow();
-  return { visible: false };
+  return hideMainWindow('ipc');
 });
 
 app.whenReady().then(async () => {

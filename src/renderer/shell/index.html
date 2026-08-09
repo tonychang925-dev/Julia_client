@@ -62,14 +62,24 @@
 
         <section id="voiceSurface" class="surface voice-surface hidden" aria-label="Voice mode">
           <button id="backToTextButton" class="back-button" type="button">← Text</button>
-          <div class="voice-center">
-            <div class="voice-orb" aria-hidden="true"></div>
-            <h1>Julia Voice</h1>
-            <p class="voice-state">Validated Golden Voice Shell</p>
-            <p class="voice-note">
-              Voice is still served by the existing HF Web Voice path. This App Shell does not transport audio.
-            </p>
-            <button id="openVoiceButton" class="primary-action" type="button">Open Voice Shell</button>
+          <div class="voice-host">
+            <div class="voice-toolbar">
+              <div>
+                <div class="voice-state">Julia Voice</div>
+                <div id="voiceLifecycleStatus" class="voice-lifecycle-status">Voice surface ready. Microphone is off.</div>
+              </div>
+              <div class="voice-actions">
+                <button id="resumeVoiceButton" class="primary-action" type="button">Start Voice</button>
+                <button id="pauseVoiceButton" class="secondary-action" type="button">Release Mic</button>
+              </div>
+            </div>
+            <iframe
+              id="voiceFrame"
+              class="voice-frame"
+              title="Julia Voice"
+              allow="microphone; autoplay"
+              src="about:blank">
+            </iframe>
             <div id="voiceUrlLabel" class="voice-url"></div>
           </div>
         </section>
