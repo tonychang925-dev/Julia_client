@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Julia Desktop</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div id="app" class="app-shell" data-mode="text">
+      <header class="topbar">
+        <div class="brand">
+          <div class="brand-mark">J</div>
+          <div>
+            <div class="brand-title">Julia</div>
+            <div class="brand-subtitle">Desktop V2</div>
+          </div>
+        </div>
+
+        <nav class="mode-switch" aria-label="Interaction mode">
+          <button id="textModeButton" class="mode-button active" type="button">Text</button>
+          <button id="voiceModeButton" class="mode-button" type="button">Voice</button>
+        </nav>
+
+        <div class="status-pill" title="Electron shell does not own the media pipeline">
+          <span class="status-dot"></span>
+          Clean shell
+        </div>
+      </header>
+
+      <main class="surface-root">
+        <section id="textSurface" class="surface text-surface" aria-label="Text mode">
+          <aside class="sidebar">
+            <button class="new-chat-button" type="button">+ New Chat</button>
+            <label class="search-label" for="conversationSearch">Search</label>
+            <input id="conversationSearch" class="search-input" placeholder="Search conversations" />
+
+            <div class="conversation-group">
+              <div class="group-title">Today</div>
+              <button class="conversation-item active" type="button">Electron V2 baseline</button>
+              <button class="conversation-item" type="button">Julia Desktop UI</button>
+            </div>
+
+            <div class="conversation-group muted">
+              <div class="group-title">Soon</div>
+              <button class="conversation-item" type="button">Persistence</button>
+              <button class="conversation-item" type="button">History / Search</button>
+              <button class="conversation-item" type="button">Settings</button>
+            </div>
+          </aside>
+
+          <section class="conversation-panel">
+            <div class="thread">
+              <div class="message assistant">
+                <div class="role">Julia</div>
+                <div class="bubble">
+                  Electron V2 baseline is confirmed. This shell is now the application layer above the validated Voice path.
+                </div>
+              </div>
+              <div class="message user">
+                <div class="role">Tony</div>
+                <div class="bubble">Next: build Text Mode, then migrate conversation persistence.</div>
+              </div>
+              <div class="message assistant">
+                <div class="role">Julia</div>
+                <div class="bubble">
+                  Voice remains delegated to the existing Golden HF Web Voice. Electron still owns no PCM, VAD, STT, TTS, or playback pipeline.
+                </div>
+              </div>
+            </div>
+
+            <div class="composer">
+              <button class="composer-plus" type="button" aria-label="Attach">+</button>
+              <input class="composer-input" placeholder="Message Julia..." disabled />
+              <button id="composerVoiceButton" class="composer-voice" type="button" aria-label="Switch to voice">🎙</button>
+              <button class="composer-send" type="button" disabled>↑</button>
+            </div>
+          </section>
+        </section>
+
+        <section id="voiceSurface" class="surface voice-surface hidden" aria-label="Voice mode">
+          <button id="backToTextButton" class="back-button" type="button">← Text</button>
+          <div class="voice-center">
+            <div class="voice-orb" aria-hidden="true"></div>
+            <h1>Julia Voice</h1>
+            <p class="voice-state">Validated Golden Voice Shell</p>
+            <p class="voice-note">
+              Voice is still served by the existing HF Web Voice path. This App Shell does not transport audio.
+            </p>
+            <button id="openVoiceButton" class="primary-action" type="button">Open Voice Shell</button>
+            <div id="voiceUrlLabel" class="voice-url"></div>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <script src="./app.js"></script>
+  </body>
+</html>

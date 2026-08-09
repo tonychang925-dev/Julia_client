@@ -8,7 +8,8 @@
     "start": "electron .",
     "start:http": "JULIA_WEB_VOICE_URL=http://localhost:7860 electron .",
     "start:https": "JULIA_WEB_VOICE_URL=https://localhost:7860 electron .",
-    "start:https:diagnostic:insecure-localhost": "JULIA_WEB_VOICE_URL=https://localhost:7860 JULIA_ALLOW_INSECURE_LOCALHOST_CERT=1 electron ."
+    "start:https:diagnostic:insecure-localhost": "JULIA_WEB_VOICE_URL=https://localhost:7860 JULIA_ALLOW_INSECURE_LOCALHOST_CERT=1 electron .",
+    "start:voice-baseline": "JULIA_DIRECT_VOICE=1 JULIA_WEB_VOICE_URL=http://localhost:7860 electron ."
   },
   "dependencies": {
     "electron": "^41.7.1"
