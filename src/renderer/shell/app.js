@@ -193,9 +193,15 @@ function isVoiceLifecycleMessage(payload) {
 window.addEventListener('message', (event) => {
   if (event.origin !== getVoiceTargetOrigin()) return;
   const payload = event.data;
-  if (!isVoiceLifecycleMessage(payload)) return;
+  if (!isVoiceLifecycleMessage(payload)) {
+    if (payload && payload.type && payload.type.includes('live-message')) {
+      console.warn('[V2_DIAG] live-message rejected by isVoiceLifecycleMessage', { source: payload.source, type: payload.type, requestId: payload.requestId });
+    }
+    return;
+  }
 
   if (payload.type === 'julia.voice.live-message') {
+    console.log('[V2_DIAG] live-message received', { conversationId: payload.conversationId, activeConversationId, role: payload.role, turnId: payload.turnId });
     upsertVoiceProjection(payload);
     return;
   }
@@ -209,7 +215,10 @@ window.addEventListener('message', (event) => {
 
 function upsertVoiceProjection(payload = {}) {
   const targetId = String(payload.conversationId || '').trim();
-  if (!targetId || targetId !== activeConversationId) return;
+  if (!targetId || targetId !== activeConversationId) {
+    console.warn('[V2_DIAG] upsertVoiceProjection rejected — targetId mismatch', { targetId, activeConversationId, role: payload.role });
+    return;
+  }
   const turnKey = [
     targetId,
     String(payload.voiceSessionId || ''),
