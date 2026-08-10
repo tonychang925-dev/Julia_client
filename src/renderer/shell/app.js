@@ -344,17 +344,10 @@ async function bootstrapVoiceWorkspace(conversationId = activeConversationId) {
   const targetId = String(conversationId || '').trim();
   if (!targetId) throw new Error('No active conversation for Voice');
   if (boundVoiceConversationId === targetId && voiceWorkspaceSessionId) return;
-  const synced = await textClient.syncConversationMessages(targetId);
-  const canonical = synced.canonical;
-  if (!canonical || canonical.conversation_id !== targetId) {
-    throw new Error('Canonical conversation bootstrap mismatch');
-  }
-  setVoiceLifecycleStatus('Loading conversation into Voice…', 'bootstrapping');
+  setVoiceLifecycleStatus('Binding Voice to conversation…', 'bootstrapping');
   const result = await sendVoiceWorkspaceRequest('julia.voice.workspace.bootstrap', {
     conversationId: targetId,
-    baseLastMessageId: canonical.last_message_id || '',
-    messages: canonical.messages || [],
-  }, 30000);
+  }, 15000);
   if (result.conversationId !== targetId) throw new Error('Voice bootstrap acknowledged another conversation');
   boundVoiceConversationId = targetId;
   voiceWorkspaceSessionId = result.voiceSessionId;
@@ -365,40 +358,14 @@ async function flushVoiceWorkspace(reason = 'text') {
   if (!boundVoiceConversationId || !voiceWorkspaceSessionId) return { empty: true };
   const conversationId = boundVoiceConversationId;
   if (conversationId !== activeConversationId) throw new Error('Voice workspace is bound to another conversation');
-  setVoiceLifecycleStatus(`Saving Voice conversation for ${reason}…`, 'flushing');
-  const delta = await sendVoiceWorkspaceRequest('julia.voice.workspace.flush', { conversationId }, 30000);
-  if (delta.conversationId !== conversationId || delta.voiceSessionId !== voiceWorkspaceSessionId) {
-    throw new Error('Voice workspace delta identity mismatch');
-  }
-  const turns = Array.isArray(delta.turns) ? delta.turns : [];
-  let committedTurnIds = [];
-  let committedLastMessageId = delta.baseLastMessageId || '';
-  if (turns.length) {
-    const committed = await textClient.commitExternalTurns({
-      conversationId,
-      voiceSessionId: delta.voiceSessionId,
-      baseLastMessageId: delta.baseLastMessageId || '',
-      turns,
-    });
-    committedTurnIds = [
-      ...(committed.appended_turn_ids || []),
-      ...(committed.skipped_turn_ids || []),
-    ];
-    committedLastMessageId = committed.last_message_id || committedLastMessageId;
-  }
-  voiceFrame.contentWindow.postMessage({
-    source: 'julia-electron-v2',
-    type: 'julia.voice.workspace.committed',
-    conversationId,
-    voiceSessionId: delta.voiceSessionId,
-    committedTurnIds,
-    baseLastMessageId: committedLastMessageId,
-  }, getVoiceTargetOrigin());
+  // VC-03: Core is sole canonical authority. No delta to export.
+  // Flush becomes: sync canonical view + clear binding.
+  setVoiceLifecycleStatus(`Syncing conversation for ${reason}…`, 'flushing');
   await syncCanonicalConversation(conversationId, `voice-flush:${reason}`);
   boundVoiceConversationId = null;
   voiceWorkspaceSessionId = null;
-  setVoiceLifecycleStatus('Voice conversation saved. Microphone is off.', 'idle');
-  return { committedTurnIds, empty: turns.length === 0 };
+  setVoiceLifecycleStatus('Voice session ended. Microphone is off.', 'idle');
+  return { empty: true };
 }
 
 function isPauseConfirmed(result) {
