@@ -66,7 +66,8 @@
             <div class="voice-toolbar">
               <div>
                 <div class="voice-state">Julia Voice</div>
-                <div id="voiceLifecycleStatus" class="voice-lifecycle-status">Voice surface ready. Microphone is off.</div>
+                <div class="voice-status-row"><span id="voicePhasePill" class="voice-phase-pill">Idle</span><span id="voiceLifecycleStatus" class="voice-lifecycle-status">Voice surface ready. Microphone is off.</span></div>
+                <div id="voiceStateHint" class="voice-state-hint">Microphone is off.</div>
               </div>
               <div class="voice-actions">
                 <button id="resumeVoiceButton" class="primary-action" type="button">Start Voice</button>
@@ -167,6 +168,7 @@
       </section>
     </div>
 
+    <script src="./voice-ux-state.js"></script>
     <script src="./app.js"></script>
   </body>
 </html>

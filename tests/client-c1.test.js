@@ -22,6 +22,11 @@ const {
 } = require('../src/main/text-client');
 const { ConversationStore } = require('../src/main/conversation-store');
 const { getBrainStatus } = require('../src/main/brain-status');
+const {
+  describeVoiceState,
+  getVoiceControlState,
+  isVoiceWorkspaceNotSettled,
+} = require('../src/renderer/shell/voice-ux-state');
 
 test('CLIENT-C1-TC01 builds the frozen Julia-native turn contract without history', () => {
   const turn = normalizeTurnRequest({
@@ -577,4 +582,33 @@ test('UX-POLISH-E2 mixed failed and interrupted timeline preserves canonical sta
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
+});
+
+
+test('VOICE-UX-TC01 maps body states without creating cognition authority', () => {
+  assert.deepEqual(describeVoiceState('listening').state, 'listening');
+  assert.deepEqual(describeVoiceState('speech_detected').state, 'speech');
+  assert.deepEqual(describeVoiceState('response.done').state, 'draining');
+  assert.deepEqual(describeVoiceState('audio_playing').state, 'speaking');
+  assert.deepEqual(describeVoiceState('workspace is not settled').state, 'draining');
+  assert.equal(describeVoiceState('draining').detail.includes('settle'), true);
+});
+
+test('VOICE-UX-TC02 disables conflicting controls during Voice busy phases', () => {
+  assert.equal(getVoiceControlState('idle').startDisabled, false);
+  assert.equal(getVoiceControlState('idle').releaseDisabled, true);
+  assert.equal(getVoiceControlState('listening').startDisabled, true);
+  assert.equal(getVoiceControlState('listening').releaseDisabled, false);
+  assert.equal(getVoiceControlState('draining').startDisabled, true);
+  assert.equal(getVoiceControlState('draining').textSwitchDiscouraged, true);
+  assert.equal(getVoiceControlState('flushing').modeSwitchBusy, true);
+});
+
+test('VOICE-UX-TC03 classifies not-settled release failure as recoverable DRAINING UX', () => {
+  assert.equal(isVoiceWorkspaceNotSettled(new Error('Voice workspace is not settled')), true);
+  assert.equal(isVoiceWorkspaceNotSettled('draining before flush'), true);
+  assert.equal(isVoiceWorkspaceNotSettled(new Error('Microphone access denied')), false);
+  const denied = describeVoiceState('error', { message: 'Microphone access denied: Permission denied' });
+  assert.equal(denied.state, 'error');
+  assert.equal(denied.label, 'Voice error');
 });

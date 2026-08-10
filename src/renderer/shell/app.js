@@ -12,6 +12,8 @@ const backToTextButton = document.getElementById('backToTextButton');
 const voiceUrlLabel = document.getElementById('voiceUrlLabel');
 const voiceFrame = document.getElementById('voiceFrame');
 const voiceLifecycleStatus = document.getElementById('voiceLifecycleStatus');
+const voicePhasePill = document.getElementById('voicePhasePill');
+const voiceStateHint = document.getElementById('voiceStateHint');
 const resumeVoiceButton = document.getElementById('resumeVoiceButton');
 const pauseVoiceButton = document.getElementById('pauseVoiceButton');
 const thread = document.getElementById('conversationThread');
@@ -82,14 +84,61 @@ function showSurface(mode) {
   voiceModeButton.classList.toggle('active', isVoice);
 }
 
+function getVoiceUx() {
+  return window.JuliaVoiceUX || {
+    describeVoiceState: (state, payload = {}) => ({
+      state: String(state || 'idle'),
+      label: String(state || 'Voice'),
+      detail: payload.message || '',
+      active: ['active', 'listening'].includes(String(state || '').toLowerCase()),
+      busy: false,
+    }),
+    getVoiceControlState: () => ({ startDisabled: false, releaseDisabled: false, textSwitchDiscouraged: false }),
+    isVoiceWorkspaceNotSettled: (error) => /not settled/i.test(String(error?.message || error || '')),
+  };
+}
+
+function updateVoiceControls() {
+  const controls = getVoiceUx().getVoiceControlState(voiceLifecycleState);
+  resumeVoiceButton.disabled = Boolean(controls.startDisabled);
+  pauseVoiceButton.disabled = Boolean(controls.releaseDisabled);
+  backToTextButton.classList.toggle('discouraged', Boolean(controls.textSwitchDiscouraged));
+  textModeButton.classList.toggle('discouraged', Boolean(controls.textSwitchDiscouraged));
+}
+
 function setVoiceLifecycleStatus(message, state = voiceLifecycleState) {
-  voiceLifecycleState = state;
-  voiceLifecycleStatus.textContent = message;
-  voiceSurface.dataset.voiceState = state;
+  const display = getVoiceUx().describeVoiceState(state, { message });
+  voiceLifecycleState = display.state;
+  voiceLifecycleStatus.textContent = message || display.detail;
+  voiceSurface.dataset.voiceState = display.state;
+  if (voicePhasePill) voicePhasePill.textContent = display.label;
+  if (voiceStateHint) voiceStateHint.textContent = display.detail;
+  updateVoiceControls();
 }
 
 function isVoiceCapturePotentiallyActive() {
-  return ['active', 'listening', 'resuming', 'pausing'].includes(String(voiceLifecycleState).toLowerCase());
+  return ['active', 'listening', 'speech', 'processing', 'speaking', 'resuming', 'pausing', 'draining'].includes(String(voiceLifecycleState).toLowerCase());
+}
+
+function applyVoiceRuntimeEvent(payload) {
+  const type = String(payload?.type || payload?.event || '').toLowerCase();
+  const status = payload?.status || payload?.state;
+  if (payload?.partial || type.includes('transcript.partial') || type.includes('speech')) {
+    setVoiceLifecycleStatus('Speech detected. Transcript is still in Voice workspace.', 'speech');
+    return;
+  }
+  if (type.includes('response') && (type.includes('done') || type.includes('finished'))) {
+    setVoiceLifecycleStatus('Julia response generated. Waiting for Voice audio/workspace to settle…', 'draining');
+    return;
+  }
+  if (type.includes('audio') || type.includes('playback') || type.includes('tts')) {
+    setVoiceLifecycleStatus('Julia is speaking.', 'speaking');
+    return;
+  }
+  if (status) {
+    const display = getVoiceUx().describeVoiceState(status, payload);
+    setVoiceLifecycleStatus(payload.message || `Voice lifecycle: ${display.label}`, display.state);
+  }
 }
 
 function ensureVoiceLoaded() {
@@ -154,10 +203,7 @@ window.addEventListener('message', (event) => {
     resolveVoiceCommand(payload.requestId, payload);
   }
 
-  if (payload.status || payload.state) {
-    const state = payload.status || payload.state;
-    setVoiceLifecycleStatus(`Voice lifecycle: ${state}`, String(state).toLowerCase());
-  }
+  applyVoiceRuntimeEvent(payload);
 });
 
 async function syncCanonicalConversation(conversationId = activeConversationId, reason = 'manual') {
@@ -276,7 +322,7 @@ async function bootstrapVoiceWorkspace(conversationId = activeConversationId) {
   if (result.conversationId !== targetId) throw new Error('Voice bootstrap acknowledged another conversation');
   boundVoiceConversationId = targetId;
   voiceWorkspaceSessionId = result.voiceSessionId;
-  setVoiceLifecycleStatus('Voice workspace ready. Microphone is off.', 'paused');
+  setVoiceLifecycleStatus('Voice workspace ready. Microphone is off.', 'idle');
 }
 
 async function flushVoiceWorkspace(reason = 'text') {
@@ -312,7 +358,7 @@ async function flushVoiceWorkspace(reason = 'text') {
     baseLastMessageId: committedLastMessageId,
   }, getVoiceTargetOrigin());
   await syncCanonicalConversation(conversationId, `voice-flush:${reason}`);
-  setVoiceLifecycleStatus('Voice conversation saved. Microphone is off.', 'paused');
+  setVoiceLifecycleStatus('Voice conversation saved. Microphone is off.', 'idle');
   return { committedTurnIds, empty: turns.length === 0 };
 }
 
@@ -329,12 +375,12 @@ function isPauseConfirmed(result) {
 
 async function pauseVoiceCapture(reason = 'text') {
   if (!voiceLoaded) {
-    setVoiceLifecycleStatus('Voice surface ready. Microphone is off.', 'paused');
+    setVoiceLifecycleStatus('Voice surface ready. Microphone is off.', 'idle');
     return { ok: true, skipped: true };
   }
 
   if (!isVoiceCapturePotentiallyActive()) {
-    setVoiceLifecycleStatus('Voice surface ready. Microphone is off.', 'paused');
+    setVoiceLifecycleStatus('Voice surface ready. Microphone is off.', 'idle');
     return { ok: true, skipped: true, state: voiceLifecycleState };
   }
 
@@ -365,7 +411,11 @@ async function switchToTextMode(reason = 'text') {
     showSurface('text');
   } catch (error) {
     showSurface('voice');
-    setVoiceLifecycleStatus(`Microphone release failed: ${error.message}`, 'error');
+    if (getVoiceUx().isVoiceWorkspaceNotSettled(error)) {
+      setVoiceLifecycleStatus('Voice is finishing. Wait for generation/audio to settle, then try Text again.', 'draining');
+    } else {
+      setVoiceLifecycleStatus(`Microphone release failed: ${error.message}`, 'error');
+    }
     throw error;
   }
   await syncCanonicalConversation(activeConversationId, `switch-to-text:${reason}`).catch((error) => {
@@ -375,13 +425,18 @@ async function switchToTextMode(reason = 'text') {
 
 async function switchToVoiceMode({ resume = true } = {}) {
   ensureVoiceLoaded();
-  await ensureActiveConversation();
-  await bootstrapVoiceWorkspace(activeConversationId);
   showSurface('voice');
+  try {
+    await ensureActiveConversation();
+    await bootstrapVoiceWorkspace(activeConversationId);
+  } catch (error) {
+    setVoiceLifecycleStatus(`Voice mode unavailable: ${error.message}`, 'error');
+    throw error;
+  }
   if (resume) {
     await resumeVoiceCapture();
   } else {
-    setVoiceLifecycleStatus('Voice surface ready. Microphone is off.', 'paused');
+    setVoiceLifecycleStatus('Voice surface ready. Microphone is off.', 'idle');
   }
 }
 
@@ -1317,11 +1372,15 @@ textModeButton.addEventListener('click', () => {
 });
 voiceModeButton.addEventListener('click', () => {
   switchToVoiceMode({ resume: false }).catch((error) => {
+    showSurface('voice');
+    setVoiceLifecycleStatus(`Voice mode unavailable: ${error.message}`, 'error');
     console.error('[V2_MODE_VOICE_FAILED]', error);
   });
 });
 composerVoiceButton.addEventListener('click', () => {
   switchToVoiceMode({ resume: false }).catch((error) => {
+    showSurface('voice');
+    setVoiceLifecycleStatus(`Voice mode unavailable: ${error.message}`, 'error');
     console.error('[V2_MODE_VOICE_FAILED]', error);
   });
 });
@@ -1437,6 +1496,8 @@ restoreSettingsState().catch((error) => {
     checked_at: new Date().toISOString(),
   });
 });
+setVoiceLifecycleStatus('Voice surface ready. Microphone is off.', 'idle');
+
 restoreConversationState().catch((error) => {
   thread.replaceChildren();
   const message = appendMessage('assistant', `Conversation restore failed: ${error.message}`);

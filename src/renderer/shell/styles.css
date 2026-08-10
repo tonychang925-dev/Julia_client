@@ -517,6 +517,56 @@ button, input { font: inherit; }
   font-size: 12px;
 }
 
+.voice-status-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.voice-phase-pill {
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  padding: 3px 8px;
+  border: 1px solid rgba(255,255,255,.12);
+  border-radius: 999px;
+  color: var(--accent-2);
+  background: rgba(114, 228, 192, .08);
+  font-size: 12px;
+  font-weight: 700;
+}
+.voice-state-hint {
+  margin-top: 5px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+.voice-surface[data-voice-state="listening"] .voice-phase-pill,
+.voice-surface[data-voice-state="speech"] .voice-phase-pill {
+  border-color: rgba(114, 228, 192, .38);
+  color: #9df2dc;
+  background: rgba(114, 228, 192, .11);
+}
+.voice-surface[data-voice-state="processing"] .voice-phase-pill,
+.voice-surface[data-voice-state="speaking"] .voice-phase-pill,
+.voice-surface[data-voice-state="draining"] .voice-phase-pill,
+.voice-surface[data-voice-state="flushing"] .voice-phase-pill {
+  border-color: rgba(255, 191, 92, .38);
+  color: #e3ad5c;
+  background: rgba(255, 191, 92, .09);
+}
+.voice-surface[data-voice-state="error"] .voice-phase-pill {
+  border-color: rgba(255, 103, 103, .45);
+  color: #ffb4b4;
+  background: rgba(255, 103, 103, .09);
+}
+.voice-actions button:disabled,
+.back-button.discouraged,
+.mode-button.discouraged {
+  cursor: not-allowed;
+  opacity: .58;
+}
+
 .settings-panel {
   position: fixed;
   inset: 0;
