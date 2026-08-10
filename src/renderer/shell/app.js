@@ -65,6 +65,7 @@ const canonicalSyncInFlight = new Map();
 let boundVoiceConversationId = null;
 let voiceWorkspaceSessionId = null;
 let currentConversationNotice = null;
+const liveVoiceProjections = new Map();
 
 voiceFrame.addEventListener('load', () => {
   boundVoiceConversationId = null;
@@ -191,11 +192,8 @@ window.addEventListener('message', (event) => {
   const payload = event.data;
   if (!isVoiceLifecycleMessage(payload)) return;
 
-  if (
-    !payload.partial
-    && (payload.type === 'julia.voice.transcript' || payload.type === 'voice:transcript')
-  ) {
-    scheduleCanonicalConversationSync(payload.conversationId || activeConversationId, 'voice-turn');
+  if (payload.type === 'julia.voice.live-message') {
+    upsertVoiceProjection(payload);
     return;
   }
 
@@ -205,6 +203,41 @@ window.addEventListener('message', (event) => {
 
   applyVoiceRuntimeEvent(payload);
 });
+
+function upsertVoiceProjection(payload = {}) {
+  const targetId = String(payload.conversationId || '').trim();
+  if (!targetId || targetId !== activeConversationId) return;
+  const turnKey = [
+    targetId,
+    String(payload.voiceSessionId || ''),
+    String(payload.turnId || ''),
+    String(payload.role || ''),
+  ].join('::');
+  const existing = liveVoiceProjections.get(turnKey);
+  if (existing) {
+    setMessageContent(existing, payload.content || '');
+    applyMessagePresentation(existing, payload.role, payload.status || 'completed', {
+      modality: 'voice',
+      source: 'julia-voice-live',
+      projectionState: 'live',
+    });
+    return;
+  }
+  const el = appendMessage(payload.role, payload.content || '', {
+    conversationId: targetId,
+    turnId: payload.turnId,
+    modality: 'voice',
+    status: payload.status || 'completed',
+    metadata: {
+      source: 'julia-voice-live',
+      projection_state: 'live',
+      authority: 'non_canonical',
+    },
+  });
+  el.classList.add('voice-projection');
+  liveVoiceProjections.set(turnKey, el);
+  thread.querySelector('.empty-thread')?.remove();
+}
 
 async function syncCanonicalConversation(conversationId = activeConversationId, reason = 'manual') {
   const targetId = String(conversationId || '').trim();
@@ -764,6 +797,7 @@ function appendMessage(role, content, options) {
 }
 
 function renderConversationMessages(conversation) {
+  const survivingProjections = new Map(liveVoiceProjections);
   thread.replaceChildren();
 
   if (currentConversationNotice) {
@@ -778,11 +812,7 @@ function renderConversationMessages(conversation) {
   }
 
   const messages = conversation?.messages || [];
-  if (messages.length === 0) {
-    thread.appendChild(createWelcomeMessage());
-    return;
-  }
-
+  const canonicalTurnIds = new Set();
   for (const message of messages) {
     appendMessage(message.role, message.content, {
       conversationId: message.conversation_id || conversation?.conversation_id,
@@ -793,6 +823,25 @@ function renderConversationMessages(conversation) {
       source: message.metadata?.source,
       metadata: message.metadata,
     });
+    if (message.turn_id) canonicalTurnIds.add(message.turn_id);
+  }
+
+  for (const [key, el] of survivingProjections) {
+    const parts = key.split('::');
+    const projTurnId = parts[2] || '';
+    if (canonicalTurnIds.has(projTurnId)) {
+      liveVoiceProjections.delete(key);
+      continue;
+    }
+    if (!el.isConnected) {
+      liveVoiceProjections.delete(key);
+      continue;
+    }
+    thread.appendChild(el);
+  }
+
+  if (messages.length === 0 && liveVoiceProjections.size === 0) {
+    thread.appendChild(createWelcomeMessage());
   }
 }
 
