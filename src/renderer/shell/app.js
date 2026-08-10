@@ -66,6 +66,9 @@ let boundVoiceConversationId = null;
 let voiceWorkspaceSessionId = null;
 let currentConversationNotice = null;
 const liveVoiceProjections = new Map();
+let voiceTransitionState = 'IDLE';
+let voiceBoundaryPromise = Promise.resolve();
+let pendingVoiceResume = false;
 
 voiceFrame.addEventListener('load', () => {
   boundVoiceConversationId = null;
@@ -387,6 +390,7 @@ async function flushVoiceWorkspace(reason = 'text') {
     source: 'julia-electron-v2',
     type: 'julia.voice.workspace.committed',
     conversationId,
+    voiceSessionId: delta.voiceSessionId,
     committedTurnIds,
     baseLastMessageId: committedLastMessageId,
   }, getVoiceTargetOrigin());
@@ -435,42 +439,69 @@ async function resumeVoiceCapture() {
   showSurface('voice');
   setVoiceLifecycleStatus('Starting microphone…', 'resuming');
   const result = await sendVoiceLifecycleCommand('resumeMicCapture');
+  voiceTransitionState = 'ACTIVE';
   setVoiceLifecycleStatus('Voice listening.', 'listening');
   return result;
 }
 
 async function switchToTextMode(reason = 'text') {
-  try {
-    await pauseVoiceCapture(reason);
-    await flushVoiceWorkspace(reason);
-    showSurface('text');
-  } catch (error) {
-    showSurface('voice');
-    if (getVoiceUx().isVoiceWorkspaceNotSettled(error)) {
-      setVoiceLifecycleStatus('Voice is finishing. Wait for generation/audio to settle, then try Text again.', 'draining');
-    } else {
-      setVoiceLifecycleStatus(`Microphone release failed: ${error.message}`, 'error');
-    }
-    throw error;
+  if (voiceTransitionState === 'IDLE') {
+    voiceTransitionState = 'DRAINING';
+    const done = (async () => {
+      try {
+        await pauseVoiceCapture(reason);
+        voiceTransitionState = 'FLUSHING';
+        await flushVoiceWorkspace(reason);
+        voiceTransitionState = 'RECONCILING';
+        showSurface('text');
+      } catch (error) {
+        showSurface('voice');
+        if (getVoiceUx().isVoiceWorkspaceNotSettled(error)) {
+          setVoiceLifecycleStatus('Voice is finishing. Wait for generation/audio to settle, then try Text again.', 'draining');
+        } else {
+          setVoiceLifecycleStatus(`Microphone release failed: ${error.message}`, 'error');
+        }
+        voiceTransitionState = 'IDLE';
+        return;
+      }
+      await syncCanonicalConversation(activeConversationId, `switch-to-text:${reason}`).catch((error) => {
+        console.warn('[V2_CANONICAL_SYNC_FAILED]', { reason, error: error.message });
+      });
+      voiceTransitionState = 'IDLE';
+      if (pendingVoiceResume) {
+        pendingVoiceResume = false;
+        switchToVoiceMode({ resume: true }).catch((error) => {
+          console.error('[V2_DEFERRED_VOICE_FAILED]', error);
+        });
+      }
+    })();
+    voiceBoundaryPromise = done;
+    await done;
   }
-  await syncCanonicalConversation(activeConversationId, `switch-to-text:${reason}`).catch((error) => {
-    console.warn('[V2_CANONICAL_SYNC_FAILED]', { reason, error: error.message });
-  });
 }
 
 async function switchToVoiceMode({ resume = true } = {}) {
+  if (voiceTransitionState !== 'IDLE') {
+    pendingVoiceResume = true;
+    setVoiceLifecycleStatus('Voice is finishing a previous session. Will resume automatically…', 'draining');
+    return;
+  }
+  voiceTransitionState = 'BOOTSTRAPPING';
   ensureVoiceLoaded();
   showSurface('voice');
   try {
+    await voiceBoundaryPromise;
     await ensureActiveConversation();
     await bootstrapVoiceWorkspace(activeConversationId);
   } catch (error) {
+    voiceTransitionState = 'IDLE';
     setVoiceLifecycleStatus(`Voice mode unavailable: ${error.message}`, 'error');
     throw error;
   }
   if (resume) {
     await resumeVoiceCapture();
   } else {
+    voiceTransitionState = 'IDLE';
     setVoiceLifecycleStatus('Voice surface ready. Microphone is off.', 'idle');
   }
 }
