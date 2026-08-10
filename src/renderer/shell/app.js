@@ -62,6 +62,7 @@ let lastCacheStatus = null;
 const canonicalSyncInFlight = new Map();
 let boundVoiceConversationId = null;
 let voiceWorkspaceSessionId = null;
+let currentConversationNotice = null;
 
 voiceFrame.addEventListener('load', () => {
   boundVoiceConversationId = null;
@@ -168,14 +169,30 @@ async function syncCanonicalConversation(conversationId = activeConversationId, 
   }
   if (canonicalSyncInFlight.has(targetId)) return canonicalSyncInFlight.get(targetId);
 
+  if (reason !== 'voice-turn') {
+    setConversationNotice('Reconnecting — waiting for Core truth…', 'syncing');
+  }
+
   const syncPromise = textClient.syncConversationMessages(targetId)
     .then(async (result) => {
+      const reconciliation = result.reconciliation || {};
+      const changed = (reconciliation.inserted || 0) + (reconciliation.updated || 0) + (reconciliation.removed_local || 0);
+      setConversationNotice(
+        changed
+          ? `Back online — synced with Core (${changed} projection update${changed === 1 ? '' : 's'}).`
+          : 'Back online — conversation is synced with Core.',
+        'synced'
+      );
       if (activeConversationId === targetId) {
         renderConversationMessages(result.conversation);
         await refreshConversationList();
       }
       console.info('[V2_CANONICAL_SYNC]', { reason, conversationId: targetId, ...result.reconciliation });
       return result;
+    })
+    .catch((error) => {
+      setConversationNotice(`Offline — showing last synced conversation. ${error.message}`, 'offline');
+      throw error;
     })
     .finally(() => {
       canonicalSyncInFlight.delete(targetId);
@@ -190,6 +207,7 @@ function scheduleCanonicalConversationSync(conversationId, reason) {
   clearTimeout(canonicalSyncTimer);
   canonicalSyncTimer = setTimeout(() => {
     syncCanonicalConversation(targetId, reason).catch((error) => {
+      setConversationNotice(`Offline — showing last synced conversation. ${error.message}`, 'offline');
       console.warn('[V2_CANONICAL_SYNC_FAILED]', { reason, conversationId: targetId, error: error.message });
     });
   }, 350);
@@ -549,34 +567,131 @@ function renderMessageContent(content) {
   return fragment;
 }
 
+function getMessagePresentation(role, status, options = {}) {
+  const normalizedStatus = String(status || 'completed');
+  const modality = options.modality === 'voice' ? 'voice' : 'text';
+  const projectionState = String(options.projectionState || '');
+  const isLocalProjection = options.source === 'julia-electron-local' || projectionState.startsWith('local_') || projectionState === 'failed';
+
+  if (normalizedStatus === 'pending') {
+    return {
+      label: role === 'user' ? 'Sending' : 'Waiting for Core',
+      detail: role === 'user' ? 'Core pending' : 'Local projection until Core confirms',
+      className: 'pending',
+      retryable: false,
+    };
+  }
+  if (normalizedStatus === 'failed') {
+    return {
+      label: 'Failed',
+      detail: isLocalProjection ? 'Retryable local projection — not canonical history' : 'Failed',
+      className: 'failed',
+      retryable: role === 'user' && isLocalProjection,
+    };
+  }
+  if (normalizedStatus === 'interrupted') {
+    return {
+      label: 'Interrupted',
+      detail: modality === 'voice'
+        ? 'Core canonical interrupted voice response'
+        : 'Core canonical interrupted response',
+      className: 'interrupted',
+      retryable: false,
+    };
+  }
+  return {
+    label: projectionState === 'core_returned' ? 'Reconciling' : '',
+    detail: projectionState === 'core_returned' ? 'Waiting for canonical Core read-back' : '',
+    className: projectionState === 'core_returned' ? 'reconciling' : 'completed',
+    retryable: false,
+  };
+}
+
+function applyMessagePresentation(message, role, status, options = {}) {
+  const presentation = getMessagePresentation(role, status, options);
+  message.dataset.status = status;
+  message.classList.remove('error', 'failed', 'interrupted', 'pending', 'reconciling');
+  if (presentation.className && presentation.className !== 'completed') {
+    message.classList.add(presentation.className);
+  }
+  if (status === 'failed') message.classList.add('error');
+  if (status === 'pending') message.dataset.pending = 'true';
+  else delete message.dataset.pending;
+
+  const roleEl = message.querySelector('.role');
+  if (roleEl) {
+    const statusLabel = presentation.label ? ` · ${presentation.label}` : '';
+    roleEl.textContent = `${role === 'user' ? 'Tony' : 'Julia'}${options.modality === 'voice' ? ' 🎤' : ''}${statusLabel}`;
+  }
+  const detail = message.querySelector('.message-status-detail');
+  if (detail) {
+    detail.textContent = presentation.detail || '';
+    detail.classList.toggle('hidden', !presentation.detail);
+  }
+  return presentation;
+}
+
 function createMessage(role, content, options = {}) {
   const message = document.createElement('div');
   message.className = `message ${role}`;
   const status = options.status || (options.pending ? 'pending' : 'completed');
-  const projectionState = options.projectionState || '';
+  const projectionState = options.projectionState || options.metadata?.projection_state || '';
+  const source = options.source || options.metadata?.source || '';
   message.dataset.status = status;
+  message.dataset.role = role;
+  message.dataset.content = String(content || '');
+  if (options.turnId) message.dataset.turnId = options.turnId;
+  if (options.conversationId) message.dataset.conversationId = options.conversationId;
+  if (options.modality) message.dataset.modality = options.modality;
   if (projectionState) message.dataset.projectionState = projectionState;
-  if (options.pending || status === 'pending') message.dataset.pending = 'true';
-  if (status === 'failed') message.classList.add('error');
-  if (status === 'interrupted') message.classList.add('interrupted');
+  if (source) message.dataset.source = source;
 
   const roleEl = document.createElement('div');
   roleEl.className = 'role';
-  const statusLabel = status === 'interrupted'
-    ? ' · Interrupted'
-    : status === 'failed'
-      ? ' · Failed'
-      : status === 'pending' && role === 'user'
-        ? ' · Sending'
-        : '';
-  roleEl.textContent = `${role === 'user' ? 'Tony' : 'Julia'}${options.modality === 'voice' ? ' 🎤' : ''}${statusLabel}`;
 
   const bubble = document.createElement('div');
   bubble.className = 'bubble';
   bubble.appendChild(renderMessageContent(content));
 
-  message.append(roleEl, bubble);
+  const detail = document.createElement('div');
+  detail.className = 'message-status-detail hidden';
+
+  const actions = document.createElement('div');
+  actions.className = 'message-actions hidden';
+
+  message.append(roleEl, bubble, detail, actions);
+  const presentation = applyMessagePresentation(message, role, status, { ...options, projectionState, source });
+
+  if (presentation.retryable) {
+    const retry = document.createElement('button');
+    retry.type = 'button';
+    retry.className = 'message-action-button retry-message-button';
+    retry.dataset.action = 'retry-message';
+    retry.textContent = 'Retry';
+    actions.replaceChildren(retry);
+    actions.classList.remove('hidden');
+  }
+
   return message;
+}
+
+function createConversationNotice(kind, message) {
+  const notice = document.createElement('div');
+  notice.className = `conversation-notice ${kind || 'info'}`;
+  notice.textContent = message;
+  return notice;
+}
+
+function setConversationNotice(message, kind = 'info') {
+  currentConversationNotice = message ? { message, kind } : null;
+  const existing = thread.querySelector('.conversation-notice');
+  if (!message) {
+    existing?.remove();
+    return;
+  }
+  const notice = createConversationNotice(kind, message);
+  if (existing) existing.replaceWith(notice);
+  else thread.prepend(notice);
 }
 
 function createWelcomeMessage() {
@@ -596,10 +711,14 @@ function appendMessage(role, content, options) {
 function renderConversationMessages(conversation) {
   thread.replaceChildren();
 
+  if (currentConversationNotice) {
+    thread.appendChild(createConversationNotice(currentConversationNotice.kind, currentConversationNotice.message));
+  }
+
   if (conversation?.projection?.stale) {
     const stale = document.createElement('div');
     stale.className = 'cache-banner';
-    stale.textContent = `Offline/stale local projection. Last Core sync failed${conversation.projection.last_reconcile_error ? `: ${conversation.projection.last_reconcile_error}` : '.'}`;
+    stale.textContent = `Offline — showing last synced conversation. Last Core sync failed${conversation.projection.last_reconcile_error ? `: ${conversation.projection.last_reconcile_error}` : '.'}`;
     thread.appendChild(stale);
   }
 
@@ -611,9 +730,13 @@ function renderConversationMessages(conversation) {
 
   for (const message of messages) {
     appendMessage(message.role, message.content, {
+      conversationId: message.conversation_id || conversation?.conversation_id,
+      turnId: message.turn_id,
       modality: message.modality,
       status: message.status,
       projectionState: message.metadata?.projection_state,
+      source: message.metadata?.source,
+      metadata: message.metadata,
     });
   }
 }
@@ -761,6 +884,7 @@ async function ensureActiveConversation() {
     renderConversationMessages(result.conversation);
   } catch (error) {
     console.warn('[V2_CANONICAL_ENSURE_FAILED]', error.message);
+    setConversationNotice(`Offline — showing last synced conversation. ${error.message}`, 'offline');
     renderConversationMessages(conversation);
   }
   await refreshConversationList();
@@ -782,6 +906,7 @@ async function openConversation(conversationId) {
     renderConversationMessages(result.conversation);
   } catch (error) {
     console.warn('[V2_CANONICAL_OPEN_FAILED]', error.message);
+    setConversationNotice(`Offline — showing last synced conversation. ${error.message}`, 'offline');
     renderConversationMessages(conversation);
   }
   await refreshConversationList();
@@ -899,6 +1024,7 @@ async function restoreConversationState() {
     renderConversationMessages(result.conversation);
   } catch (error) {
     console.warn('[V2_CANONICAL_RESTORE_FAILED]', error.message);
+    setConversationNotice(`Offline — showing last synced conversation. ${error.message}`, 'offline');
     renderConversationMessages(conversation);
   }
   await refreshConversationList();
@@ -924,6 +1050,14 @@ function setMessageContent(message, content) {
 }
 
 thread.addEventListener('click', async (event) => {
+  const retryButton = event.target.closest('[data-action="retry-message"]');
+  if (retryButton) {
+    retryFailedMessage(retryButton.closest('.message')).catch((error) => {
+      setConversationNotice(`Retry failed: ${error.message}`, 'error');
+    });
+    return;
+  }
+
   const button = event.target.closest('.copy-button');
   if (!button) return;
 
@@ -950,18 +1084,122 @@ textClient.onTextStreamEvent((event) => {
   if (event.type === 'done') {
     stream.content = event.content || stream.content;
     setMessageContent(stream.message, stream.content);
-    delete stream.message.dataset.pending;
+    applyMessagePresentation(stream.message, 'assistant', 'completed', {
+      modality: 'text',
+      source: 'julia-electron-local',
+      projectionState: 'core_returned',
+    });
     activeTextStreams.delete(event.requestId);
     return;
   }
 
   if (event.type === 'error') {
     setMessageContent(stream.message, `Text mode request failed: ${event.error}`);
-    stream.message.classList.add('error');
-    delete stream.message.dataset.pending;
+    applyMessagePresentation(stream.message, 'assistant', 'failed', {
+      modality: 'text',
+      source: 'julia-electron-local',
+      projectionState: 'failed',
+    });
     activeTextStreams.delete(event.requestId);
   }
 });
+
+async function executeTextTurn({ conversationId, turnId, text, reason = 'text-turn' }) {
+  const pendingAssistant = appendMessage('assistant', 'Julia is thinking…', {
+    conversationId,
+    turnId,
+    status: 'pending',
+    modality: 'text',
+    metadata: { source: 'julia-electron-local', projection_state: 'local_pending' },
+  });
+  activeTextStreams.set(turnId, { message: pendingAssistant, content: '' });
+
+  const response = await textClient.streamTextMessage({
+    requestId: turnId,
+    conversationId,
+    turnId,
+    modality: 'text',
+    input: text,
+  });
+  if (response.conversation_id !== conversationId || response.turn_id !== turnId) {
+    throw new Error('Julia returned a mismatched conversation turn');
+  }
+
+  if (activeTextStreams.has(turnId)) {
+    setMessageContent(pendingAssistant, response.content);
+    activeTextStreams.delete(turnId);
+  }
+  await textClient.addConversationMessage(conversationId, {
+    turn_id: turnId,
+    role: 'assistant',
+    modality: 'text',
+    content: response.content,
+    status: 'pending',
+    metadata: {
+      source: 'julia-electron-local',
+      projection_state: 'core_returned',
+    },
+  });
+  await syncCanonicalConversation(conversationId, reason);
+  delete pendingAssistant.dataset.pending;
+  return response;
+}
+
+async function retryFailedMessage(messageEl) {
+  if (!messageEl || messageEl.dataset.role !== 'user' || messageEl.dataset.status !== 'failed') return;
+  const conversationId = messageEl.dataset.conversationId || activeConversationId;
+  const turnId = messageEl.dataset.turnId;
+  const text = messageEl.dataset.content || '';
+  if (!conversationId || !turnId || !text.trim()) throw new Error('Retry target is missing conversation, turn, or content');
+
+  const button = messageEl.querySelector('[data-action="retry-message"]');
+  if (button) {
+    button.disabled = true;
+    button.textContent = 'Retrying…';
+  }
+  setConversationNotice('Retrying with the same turn id — waiting for Core truth…', 'syncing');
+  await textClient.addConversationMessage(conversationId, {
+    turn_id: turnId,
+    role: 'user',
+    modality: messageEl.dataset.modality || 'text',
+    content: text,
+    status: 'pending',
+    metadata: {
+      source: 'julia-electron-local',
+      projection_state: 'local_pending',
+      retry_of: turnId,
+    },
+  });
+  applyMessagePresentation(messageEl, 'user', 'pending', {
+    modality: messageEl.dataset.modality || 'text',
+    source: 'julia-electron-local',
+    projectionState: 'local_pending',
+  });
+  messageEl.querySelector('.message-actions')?.classList.add('hidden');
+
+  try {
+    await executeTextTurn({ conversationId, turnId, text, reason: 'text-retry' });
+  } catch (error) {
+    activeTextStreams.delete(turnId);
+    await textClient.addConversationMessage(conversationId, {
+      turn_id: turnId,
+      role: 'user',
+      modality: messageEl.dataset.modality || 'text',
+      content: text,
+      status: 'failed',
+      metadata: {
+        source: 'julia-electron-local',
+        projection_state: 'failed',
+        error: error.message,
+      },
+    }).catch((projectionError) => {
+      console.warn('[V2_LOCAL_PROJECTION_FAILED]', projectionError.message);
+    });
+    const conversation = await textClient.getCurrentConversation().catch(() => null);
+    if (conversation?.conversation_id === conversationId) renderConversationMessages(conversation);
+    throw error;
+  }
+}
 
 async function sendComposerMessage() {
   if (sending) return;
@@ -972,18 +1210,21 @@ async function sendComposerMessage() {
   const requestId = createRequestId();
   const turnId = requestId;
   composerInput.value = '';
-  const userMessage = appendMessage('user', text, { status: 'pending' });
+  const userMessage = appendMessage('user', text, {
+    turnId,
+    status: 'pending',
+    modality: 'text',
+    metadata: { source: 'julia-electron-local', projection_state: 'local_pending' },
+  });
   thread.querySelector('.empty-thread')?.remove();
-  const pending = appendMessage('assistant', 'Julia is thinking…', { pending: true });
-  activeTextStreams.set(requestId, { message: pending, content: '' });
   setComposerBusy(true);
 
   let conversationId = null;
-  let coreTurnCompleted = false;
   try {
     conversationId = await ensureActiveConversation();
+    userMessage.dataset.conversationId = conversationId;
     const userRecord = await textClient.addConversationMessage(conversationId, {
-      turn_id: requestId,
+      turn_id: turnId,
       role: 'user',
       modality: 'text',
       content: text,
@@ -995,65 +1236,47 @@ async function sendComposerMessage() {
     });
     activeConversationId = userRecord.conversation_id;
     await refreshConversationList();
-
-    const response = await textClient.streamTextMessage({
-      requestId,
-      conversationId,
-      turnId,
-      modality: 'text',
-      input: text,
-    });
-    if (response.conversation_id !== conversationId || response.turn_id !== turnId) {
-      throw new Error('Julia returned a mismatched conversation turn');
-    }
-    coreTurnCompleted = true;
-    if (activeTextStreams.has(requestId)) {
-      setMessageContent(pending, response.content);
-      activeTextStreams.delete(requestId);
-    }
-    await textClient.addConversationMessage(conversationId, {
-      turn_id: turnId,
-      role: 'assistant',
-      modality: 'text',
-      content: response.content,
-      status: 'pending',
-      metadata: {
-        source: 'julia-electron-local',
-        projection_state: 'core_returned',
-      },
-    });
-    await syncCanonicalConversation(conversationId, 'text-turn');
-    delete pending.dataset.pending;
+    await executeTextTurn({ conversationId, turnId, text, reason: 'text-turn' });
   } catch (error) {
-    if (!coreTurnCompleted) {
-      if (conversationId) {
-        await textClient.addConversationMessage(conversationId, {
-          turn_id: turnId,
-          role: 'user',
-          modality: 'text',
-          content: text,
-          status: 'failed',
-          metadata: {
-            source: 'julia-electron-local',
-            projection_state: 'failed',
-            error: error.message,
-          },
-        }).catch((projectionError) => {
-          console.warn('[V2_LOCAL_PROJECTION_FAILED]', projectionError.message);
-        });
-      }
-      userMessage.dataset.status = 'failed';
-      delete userMessage.dataset.pending;
-      userMessage.classList.add('error');
-      const roleEl = userMessage.querySelector('.role');
-      if (roleEl) roleEl.textContent = 'Tony · Failed';
+    if (conversationId) {
+      await textClient.addConversationMessage(conversationId, {
+        turn_id: turnId,
+        role: 'user',
+        modality: 'text',
+        content: text,
+        status: 'failed',
+        metadata: {
+          source: 'julia-electron-local',
+          projection_state: 'failed',
+          error: error.message,
+        },
+      }).catch((projectionError) => {
+        console.warn('[V2_LOCAL_PROJECTION_FAILED]', projectionError.message);
+      });
     }
-    if (activeTextStreams.has(requestId)) {
-      setMessageContent(pending, `Text mode request failed: ${error.message}`);
-      pending.classList.add('error');
-      delete pending.dataset.pending;
-      activeTextStreams.delete(requestId);
+    applyMessagePresentation(userMessage, 'user', 'failed', {
+      modality: 'text',
+      source: 'julia-electron-local',
+      projectionState: 'failed',
+    });
+    const actions = userMessage.querySelector('.message-actions');
+    if (actions) {
+      const retry = document.createElement('button');
+      retry.type = 'button';
+      retry.className = 'message-action-button retry-message-button';
+      retry.dataset.action = 'retry-message';
+      retry.textContent = 'Retry';
+      actions.replaceChildren(retry);
+      actions.classList.remove('hidden');
     }
+    if (activeTextStreams.has(turnId)) {
+      const stream = activeTextStreams.get(turnId);
+      setMessageContent(stream.message, `Text mode request failed: ${error.message}`);
+      stream.message.classList.add('error');
+      delete stream.message.dataset.pending;
+      activeTextStreams.delete(turnId);
+    }
+    setConversationNotice(`Failed — local projection only. ${error.message}`, 'error');
   } finally {
     setComposerBusy(false);
     composerInput.focus();

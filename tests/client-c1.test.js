@@ -508,3 +508,73 @@ test('E4-AT11 corrupt local cache is discarded and rebuilt as disposable project
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('UX-POLISH-E1 retry projection reuses same turn id and canonical promote creates no duplicate', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'julia-client-ux-retry-'));
+  try {
+    const store = new ConversationStore(dir);
+    store.load();
+    const conversation = store.createConversation('Retry UX');
+    const conversationId = conversation.conversation_id;
+
+    const pending = store.addMessage(conversationId, {
+      turn_id: 'turn-retry', role: 'user', modality: 'text', content: 'retry me', status: 'pending',
+      metadata: { source: 'julia-electron-local', projection_state: 'local_pending' },
+    });
+    const failed = store.addMessage(conversationId, {
+      turn_id: 'turn-retry', role: 'user', modality: 'text', content: 'retry me', status: 'failed',
+      metadata: { source: 'julia-electron-local', projection_state: 'failed', error: 'offline' },
+    });
+    const retryPending = store.addMessage(conversationId, {
+      turn_id: 'turn-retry', role: 'user', modality: 'text', content: 'retry me', status: 'pending',
+      metadata: { source: 'julia-electron-local', projection_state: 'local_pending', retry_of: 'turn-retry' },
+    });
+
+    assert.equal(pending.message_id, failed.message_id);
+    assert.equal(failed.message_id, retryPending.message_id);
+    assert.equal(store.getConversation(conversationId).messages.length, 1);
+    assert.equal(store.getConversation(conversationId).messages[0].status, 'pending');
+
+    const reconciled = store.reconcileCanonicalMessages(conversationId, {
+      messages: [
+        { message_id: 'core-u', conversation_id: conversationId, turn_id: 'turn-retry', role: 'user', modality: 'text', content: 'retry me', status: 'completed', created_at: '2026-08-10T01:00:00Z' },
+        { message_id: 'core-a', conversation_id: conversationId, turn_id: 'turn-retry', role: 'assistant', modality: 'text', content: 'retried', status: 'completed', created_at: '2026-08-10T01:00:01Z' },
+      ],
+    });
+    assert.deepEqual(reconciled.conversation.messages.map((message) => message.message_id), ['core-u', 'core-a']);
+    assert.deepEqual(reconciled.conversation.messages.map((message) => message.status), ['completed', 'completed']);
+    assert.equal(reconciled.conversation.messages.some((message) => message.metadata.source === 'julia-electron-local'), false);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('UX-POLISH-E2 mixed failed and interrupted timeline preserves canonical statuses after reconcile', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'julia-client-ux-timeline-'));
+  try {
+    const store = new ConversationStore(dir);
+    store.load();
+    const conversation = store.createConversation('Timeline UX');
+    const conversationId = conversation.conversation_id;
+    store.addMessage(conversationId, {
+      turn_id: 'local-failed', role: 'user', modality: 'text', content: 'not committed', status: 'failed',
+      metadata: { source: 'julia-electron-local', projection_state: 'failed' },
+    });
+
+    const result = store.reconcileCanonicalMessages(conversationId, {
+      messages: [
+        { message_id: 'm1', conversation_id: conversationId, turn_id: 't1', role: 'user', modality: 'text', content: 'A', status: 'completed', created_at: '2026-08-10T02:00:00Z' },
+        { message_id: 'm2', conversation_id: conversationId, turn_id: 't1', role: 'assistant', modality: 'voice', content: 'partial A', status: 'interrupted', created_at: '2026-08-10T02:00:01Z' },
+        { message_id: 'm3', conversation_id: conversationId, turn_id: 't2', role: 'user', modality: 'text', content: 'B', status: 'completed', created_at: '2026-08-10T02:00:02Z' },
+        { message_id: 'm4', conversation_id: conversationId, turn_id: 't2', role: 'assistant', modality: 'text', content: 'B done', status: 'completed', created_at: '2026-08-10T02:00:03Z' },
+      ],
+    });
+
+    assert.deepEqual(result.conversation.messages.map((message) => message.message_id), ['m1', 'm2', 'm3', 'm4']);
+    assert.deepEqual(result.conversation.messages.map((message) => message.status), ['completed', 'interrupted', 'completed', 'completed']);
+    assert.equal(result.conversation.messages.some((message) => message.turn_id === 'local-failed'), false);
+    assert.equal(result.reconciliation.removed_local, 1);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
