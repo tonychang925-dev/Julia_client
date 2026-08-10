@@ -150,6 +150,30 @@ class ConversationStore {
     return conversation;
   }
 
+  createConversationWithId(conversationId, title = 'New Conversation') {
+    this.load();
+    const timestamp = nowIso();
+    const existing = this.getConversation(conversationId);
+    if (existing) {
+      this.state.currentConversationId = conversationId;
+      this.save();
+      return existing;
+    }
+    const conversation = {
+      conversation_id: conversationId,
+      title: deriveTitle(title),
+      title_updated_by_user: false,
+      created_at: timestamp,
+      updated_at: timestamp,
+      projection: normalizeProjectionMetadata(),
+      messages: [],
+    };
+    this.state.conversations.unshift(conversation);
+    this.state.currentConversationId = conversationId;
+    this.save();
+    return conversation;
+  }
+
   renameConversation(conversationId, title) {
     this.load();
     const conversation = this.getConversation(conversationId);

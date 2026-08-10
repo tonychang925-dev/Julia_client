@@ -7,6 +7,7 @@ const {
   streamTextMessage,
   getConversationMessages,
   ensureConversationMessages,
+  createConversationViaCore,
   commitExternalTurns,
   getConversationTurnApiTemplate,
 } = require('./text-client');
@@ -277,7 +278,16 @@ ipcMain.handle('julia:conversation:current', async () => {
 });
 
 ipcMain.handle('julia:conversation:create', async (_event, input) => {
-  return getConversationStore().createConversation(input?.title || 'New Conversation');
+  const title = input?.title || 'New Conversation';
+  let canonical;
+  try {
+    canonical = await createConversationViaCore(title, getTextClientOptions());
+  } catch (error) {
+    // Core unreachable: use local candidate as fallback
+    console.warn('[V2_CREATE_CORE_FAILED]', error.message);
+    return getConversationStore().createConversation(title);
+  }
+  return getConversationStore().createConversationWithId(canonical.conversation_id, canonical.title);
 });
 
 ipcMain.handle('julia:conversation:open', async (_event, input) => {

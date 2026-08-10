@@ -327,6 +327,26 @@ async function streamTextMessage(input, handlers = {}, options = {}) {
   };
 }
 
+async function createConversationViaCore(title = 'New Conversation', options = {}) {
+  const url = buildConversationsApiUrl(options.brainEndpoint);
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: JSON.stringify({ title }),
+  });
+  if (!response.ok) {
+    const body = await response.text().catch(() => '');
+    throw new Error(`Julia conversation create failed: HTTP ${response.status}${body ? ` ${body.slice(0, 240)}` : ''}`);
+  }
+  const data = await response.json();
+  return {
+    conversation_id: data.conversation_id,
+    title: data.title,
+    created_at: data.created_at,
+    durable: true,
+  };
+}
+
 module.exports = {
   DEFAULT_BRAIN_ENDPOINT,
   buildConversationMessagesApiUrl,
@@ -339,6 +359,7 @@ module.exports = {
   getConversationMessages,
   getConversationDetail,
   ensureConversationMessages,
+  createConversationViaCore,
   commitExternalTurns,
   getTextApiUrl,
   normalizeTurnRequest,
