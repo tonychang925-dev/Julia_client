@@ -1371,14 +1371,14 @@ textModeButton.addEventListener('click', () => {
   });
 });
 voiceModeButton.addEventListener('click', () => {
-  switchToVoiceMode({ resume: false }).catch((error) => {
+  switchToVoiceMode({ resume: true }).catch((error) => {
     showSurface('voice');
     setVoiceLifecycleStatus(`Voice mode unavailable: ${error.message}`, 'error');
     console.error('[V2_MODE_VOICE_FAILED]', error);
   });
 });
 composerVoiceButton.addEventListener('click', () => {
-  switchToVoiceMode({ resume: false }).catch((error) => {
+  switchToVoiceMode({ resume: true }).catch((error) => {
     showSurface('voice');
     setVoiceLifecycleStatus(`Voice mode unavailable: ${error.message}`, 'error');
     console.error('[V2_MODE_VOICE_FAILED]', error);
