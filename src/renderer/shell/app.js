@@ -1212,6 +1212,17 @@ textClient.onTextStreamEvent((event) => {
   const stream = activeTextStreams.get(event?.requestId);
   if (!stream) return;
 
+  // EC-04 L1 guard: event must belong to current active conversation
+  const eventConvId = String(event?.conversationId || '');
+  if (eventConvId && eventConvId !== activeConversationId) {
+    // Background event: update owner projection but do NOT render
+    if (event.type === 'done') {
+      scheduleCanonicalConversationSync(eventConvId, 'background-stream-done');
+    }
+    activeTextStreams.delete(event.requestId);
+    return;
+  }
+
   if (event.type === 'delta') {
     stream.content = event.content || `${stream.content}${event.delta || ''}`;
     setMessageContent(stream.message, stream.content);
