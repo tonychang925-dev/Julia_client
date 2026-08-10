@@ -65,10 +65,6 @@ const canonicalSyncInFlight = new Map();
 let boundVoiceConversationId = null;
 let voiceWorkspaceSessionId = null;
 let currentConversationNotice = null;
-const liveVoiceProjections = new Map();
-let voiceTransitionState = 'IDLE';
-let voiceBoundaryPromise = Promise.resolve();
-let pendingVoiceResume = false;
 
 voiceFrame.addEventListener('load', () => {
   boundVoiceConversationId = null;
@@ -193,16 +189,13 @@ function isVoiceLifecycleMessage(payload) {
 window.addEventListener('message', (event) => {
   if (event.origin !== getVoiceTargetOrigin()) return;
   const payload = event.data;
-  if (!isVoiceLifecycleMessage(payload)) {
-    if (payload && payload.type && payload.type.includes('live-message')) {
-      console.warn('[V2_DIAG] live-message rejected by isVoiceLifecycleMessage', { source: payload.source, type: payload.type, requestId: payload.requestId });
-    }
-    return;
-  }
+  if (!isVoiceLifecycleMessage(payload)) return;
 
-  if (payload.type === 'julia.voice.live-message') {
-    console.log('[V2_DIAG] live-message received', { conversationId: payload.conversationId, activeConversationId, role: payload.role, turnId: payload.turnId });
-    upsertVoiceProjection(payload);
+  if (
+    !payload.partial
+    && (payload.type === 'julia.voice.transcript' || payload.type === 'voice:transcript')
+  ) {
+    scheduleCanonicalConversationSync(payload.conversationId || activeConversationId, 'voice-turn');
     return;
   }
 
@@ -212,44 +205,6 @@ window.addEventListener('message', (event) => {
 
   applyVoiceRuntimeEvent(payload);
 });
-
-function upsertVoiceProjection(payload = {}) {
-  const targetId = String(payload.conversationId || '').trim();
-  if (!targetId || targetId !== activeConversationId) {
-    console.warn('[V2_DIAG] upsertVoiceProjection rejected — targetId mismatch', { targetId, activeConversationId, role: payload.role });
-    return;
-  }
-  const turnKey = [
-    targetId,
-    String(payload.voiceSessionId || ''),
-    String(payload.turnId || ''),
-    String(payload.role || ''),
-  ].join('::');
-  const existing = liveVoiceProjections.get(turnKey);
-  if (existing) {
-    setMessageContent(existing, payload.content || '');
-    applyMessagePresentation(existing, payload.role, payload.status || 'completed', {
-      modality: 'voice',
-      source: 'julia-voice-live',
-      projectionState: 'live',
-    });
-    return;
-  }
-  const el = appendMessage(payload.role, payload.content || '', {
-    conversationId: targetId,
-    turnId: payload.turnId,
-    modality: 'voice',
-    status: payload.status || 'completed',
-    metadata: {
-      source: 'julia-voice-live',
-      projection_state: 'live',
-      authority: 'non_canonical',
-    },
-  });
-  el.classList.add('voice-projection');
-  liveVoiceProjections.set(turnKey, el);
-  thread.querySelector('.empty-thread')?.remove();
-}
 
 async function syncCanonicalConversation(conversationId = activeConversationId, reason = 'manual') {
   const targetId = String(conversationId || '').trim();
@@ -353,23 +308,16 @@ async function bootstrapVoiceWorkspace(conversationId = activeConversationId) {
   const targetId = String(conversationId || '').trim();
   if (!targetId) throw new Error('No active conversation for Voice');
   if (boundVoiceConversationId === targetId && voiceWorkspaceSessionId) return;
-  setVoiceLifecycleStatus('Binding Voice to conversation…', 'bootstrapping');
-  const result = await sendVoiceWorkspaceRequest('julia.voice.workspace.bootstrap', {
-    conversationId: targetId,
-  }, 15000);
-  if (result.conversationId !== targetId) throw new Error('Voice bootstrap acknowledged another conversation');
+  // RVC-01: No workspace bootstrap. Just bind conversation identity.
   boundVoiceConversationId = targetId;
-  voiceWorkspaceSessionId = result.voiceSessionId;
+  voiceWorkspaceSessionId = `vws_${Date.now().toString(36)}`;
   setVoiceLifecycleStatus('Voice workspace ready. Microphone is off.', 'idle');
 }
 
 async function flushVoiceWorkspace(reason = 'text') {
   if (!boundVoiceConversationId || !voiceWorkspaceSessionId) return { empty: true };
   const conversationId = boundVoiceConversationId;
-  if (conversationId !== activeConversationId) throw new Error('Voice workspace is bound to another conversation');
-  // VC-03: Core is sole canonical authority. No delta to export.
-  // Flush becomes: sync canonical view + clear binding.
-  setVoiceLifecycleStatus(`Syncing conversation for ${reason}…`, 'flushing');
+  // RVC-01: Core is canonical authority. No delta to export.
   await syncCanonicalConversation(conversationId, `voice-flush:${reason}`);
   boundVoiceConversationId = null;
   voiceWorkspaceSessionId = null;
@@ -415,69 +363,42 @@ async function resumeVoiceCapture() {
   showSurface('voice');
   setVoiceLifecycleStatus('Starting microphone…', 'resuming');
   const result = await sendVoiceLifecycleCommand('resumeMicCapture');
-  voiceTransitionState = 'ACTIVE';
   setVoiceLifecycleStatus('Voice listening.', 'listening');
   return result;
 }
 
 async function switchToTextMode(reason = 'text') {
-  if (voiceTransitionState === 'IDLE' || voiceTransitionState === 'ACTIVE') {
-    voiceTransitionState = 'DRAINING';
-    const done = (async () => {
-      try {
-        await pauseVoiceCapture(reason);
-        voiceTransitionState = 'FLUSHING';
-        await flushVoiceWorkspace(reason);
-        voiceTransitionState = 'RECONCILING';
-        showSurface('text');
-      } catch (error) {
-        showSurface('voice');
-        if (getVoiceUx().isVoiceWorkspaceNotSettled(error)) {
-          setVoiceLifecycleStatus('Voice is finishing. Wait for generation/audio to settle, then try Text again.', 'draining');
-        } else {
-          setVoiceLifecycleStatus(`Microphone release failed: ${error.message}`, 'error');
-        }
-        voiceTransitionState = 'IDLE';
-        return;
-      }
-      await syncCanonicalConversation(activeConversationId, `switch-to-text:${reason}`).catch((error) => {
-        console.warn('[V2_CANONICAL_SYNC_FAILED]', { reason, error: error.message });
-      });
-      voiceTransitionState = 'IDLE';
-      if (pendingVoiceResume) {
-        pendingVoiceResume = false;
-        switchToVoiceMode({ resume: true }).catch((error) => {
-          console.error('[V2_DEFERRED_VOICE_FAILED]', error);
-        });
-      }
-    })();
-    voiceBoundaryPromise = done;
-    await done;
+  try {
+    await pauseVoiceCapture(reason);
+    await flushVoiceWorkspace(reason);
+    showSurface('text');
+  } catch (error) {
+    showSurface('voice');
+    if (getVoiceUx().isVoiceWorkspaceNotSettled(error)) {
+      setVoiceLifecycleStatus('Voice is finishing. Wait for generation/audio to settle, then try Text again.', 'draining');
+    } else {
+      setVoiceLifecycleStatus(`Microphone release failed: ${error.message}`, 'error');
+    }
+    throw error;
   }
+  await syncCanonicalConversation(activeConversationId, `switch-to-text:${reason}`).catch((error) => {
+    console.warn('[V2_CANONICAL_SYNC_FAILED]', { reason, error: error.message });
+  });
 }
 
 async function switchToVoiceMode({ resume = true } = {}) {
-  if (voiceTransitionState !== 'IDLE') {
-    pendingVoiceResume = true;
-    setVoiceLifecycleStatus('Voice is finishing a previous session. Will resume automatically…', 'draining');
-    return;
-  }
-  voiceTransitionState = 'BOOTSTRAPPING';
   ensureVoiceLoaded();
   showSurface('voice');
   try {
-    await voiceBoundaryPromise;
     await ensureActiveConversation();
     await bootstrapVoiceWorkspace(activeConversationId);
   } catch (error) {
-    voiceTransitionState = 'IDLE';
     setVoiceLifecycleStatus(`Voice mode unavailable: ${error.message}`, 'error');
     throw error;
   }
   if (resume) {
     await resumeVoiceCapture();
   } else {
-    voiceTransitionState = 'IDLE';
     setVoiceLifecycleStatus('Voice surface ready. Microphone is off.', 'idle');
   }
 }
@@ -806,7 +727,6 @@ function appendMessage(role, content, options) {
 }
 
 function renderConversationMessages(conversation) {
-  const survivingProjections = new Map(liveVoiceProjections);
   thread.replaceChildren();
 
   if (currentConversationNotice) {
@@ -821,7 +741,11 @@ function renderConversationMessages(conversation) {
   }
 
   const messages = conversation?.messages || [];
-  const canonicalTurnIds = new Set();
+  if (messages.length === 0) {
+    thread.appendChild(createWelcomeMessage());
+    return;
+  }
+
   for (const message of messages) {
     appendMessage(message.role, message.content, {
       conversationId: message.conversation_id || conversation?.conversation_id,
@@ -832,25 +756,6 @@ function renderConversationMessages(conversation) {
       source: message.metadata?.source,
       metadata: message.metadata,
     });
-    if (message.turn_id) canonicalTurnIds.add(message.turn_id);
-  }
-
-  for (const [key, el] of survivingProjections) {
-    const parts = key.split('::');
-    const projTurnId = parts[2] || '';
-    if (canonicalTurnIds.has(projTurnId)) {
-      liveVoiceProjections.delete(key);
-      continue;
-    }
-    if (!el.isConnected) {
-      liveVoiceProjections.delete(key);
-      continue;
-    }
-    thread.appendChild(el);
-  }
-
-  if (messages.length === 0 && liveVoiceProjections.size === 0) {
-    thread.appendChild(createWelcomeMessage());
   }
 }
 
@@ -1187,17 +1092,6 @@ thread.addEventListener('click', async (event) => {
 textClient.onTextStreamEvent((event) => {
   const stream = activeTextStreams.get(event?.requestId);
   if (!stream) return;
-
-  // EC-04 L1 guard: event must belong to current active conversation
-  const eventConvId = String(event?.conversationId || '');
-  if (eventConvId && eventConvId !== activeConversationId) {
-    // Background event: update owner projection but do NOT render
-    if (event.type === 'done') {
-      scheduleCanonicalConversationSync(eventConvId, 'background-stream-done');
-    }
-    activeTextStreams.delete(event.requestId);
-    return;
-  }
 
   if (event.type === 'delta') {
     stream.content = event.content || `${stream.content}${event.delta || ''}`;

@@ -336,15 +336,9 @@ async function createConversationViaCore(title = 'New Conversation', options = {
   });
   if (!response.ok) {
     const body = await response.text().catch(() => '');
-    throw new Error(`Julia conversation create failed: HTTP ${response.status}${body ? ` ${body.slice(0, 240)}` : ''}`);
+    throw new Error(`Core create failed: HTTP ${response.status}${body ? ` ${body.slice(0, 200)}` : ''}`);
   }
-  const data = await response.json();
-  return {
-    conversation_id: data.conversation_id,
-    title: data.title,
-    created_at: data.created_at,
-    durable: true,
-  };
+  return response.json();
 }
 
 module.exports = {

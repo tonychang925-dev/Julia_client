@@ -152,13 +152,13 @@ class ConversationStore {
 
   createConversationWithId(conversationId, title = 'New Conversation') {
     this.load();
-    const timestamp = nowIso();
     const existing = this.getConversation(conversationId);
     if (existing) {
       this.state.currentConversationId = conversationId;
       this.save();
       return existing;
     }
+    const timestamp = nowIso();
     const conversation = {
       conversation_id: conversationId,
       title: deriveTitle(title),
