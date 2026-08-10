@@ -527,11 +527,24 @@ function renderMessageContent(content) {
 function createMessage(role, content, options = {}) {
   const message = document.createElement('div');
   message.className = `message ${role}`;
-  if (options.pending) message.dataset.pending = 'true';
+  const status = options.status || (options.pending ? 'pending' : 'completed');
+  const projectionState = options.projectionState || '';
+  message.dataset.status = status;
+  if (projectionState) message.dataset.projectionState = projectionState;
+  if (options.pending || status === 'pending') message.dataset.pending = 'true';
+  if (status === 'failed') message.classList.add('error');
+  if (status === 'interrupted') message.classList.add('interrupted');
 
   const roleEl = document.createElement('div');
   roleEl.className = 'role';
-  roleEl.textContent = `${role === 'user' ? 'Tony' : 'Julia'}${options.modality === 'voice' ? ' 🎤' : ''}`;
+  const statusLabel = status === 'interrupted'
+    ? ' · Interrupted'
+    : status === 'failed'
+      ? ' · Failed'
+      : status === 'pending' && role === 'user'
+        ? ' · Sending'
+        : '';
+  roleEl.textContent = `${role === 'user' ? 'Tony' : 'Julia'}${options.modality === 'voice' ? ' 🎤' : ''}${statusLabel}`;
 
   const bubble = document.createElement('div');
   bubble.className = 'bubble';
@@ -565,7 +578,11 @@ function renderConversationMessages(conversation) {
   }
 
   for (const message of messages) {
-    appendMessage(message.role, message.content, { modality: message.modality });
+    appendMessage(message.role, message.content, {
+      modality: message.modality,
+      status: message.status,
+      projectionState: message.metadata?.projection_state,
+    });
   }
 }
 
@@ -855,19 +872,26 @@ async function sendComposerMessage() {
   const requestId = createRequestId();
   const turnId = requestId;
   composerInput.value = '';
-  const userMessage = appendMessage('user', text);
+  const userMessage = appendMessage('user', text, { status: 'pending' });
   thread.querySelector('.empty-thread')?.remove();
   const pending = appendMessage('assistant', 'Julia is thinking…', { pending: true });
   activeTextStreams.set(requestId, { message: pending, content: '' });
   setComposerBusy(true);
 
+  let conversationId = null;
+  let coreTurnCompleted = false;
   try {
-    const conversationId = await ensureActiveConversation();
+    conversationId = await ensureActiveConversation();
     const userRecord = await textClient.addConversationMessage(conversationId, {
       turn_id: requestId,
       role: 'user',
       modality: 'text',
       content: text,
+      status: 'pending',
+      metadata: {
+        source: 'julia-electron-local',
+        projection_state: 'local_pending',
+      },
     });
     activeConversationId = userRecord.conversation_id;
     await refreshConversationList();
@@ -882,6 +906,7 @@ async function sendComposerMessage() {
     if (response.conversation_id !== conversationId || response.turn_id !== turnId) {
       throw new Error('Julia returned a mismatched conversation turn');
     }
+    coreTurnCompleted = true;
     if (activeTextStreams.has(requestId)) {
       setMessageContent(pending, response.content);
       activeTextStreams.delete(requestId);
@@ -891,11 +916,38 @@ async function sendComposerMessage() {
       role: 'assistant',
       modality: 'text',
       content: response.content,
+      status: 'pending',
+      metadata: {
+        source: 'julia-electron-local',
+        projection_state: 'core_returned',
+      },
     });
     await syncCanonicalConversation(conversationId, 'text-turn');
     delete pending.dataset.pending;
   } catch (error) {
-    userMessage.classList.toggle('error', !activeConversationId);
+    if (!coreTurnCompleted) {
+      if (conversationId) {
+        await textClient.addConversationMessage(conversationId, {
+          turn_id: turnId,
+          role: 'user',
+          modality: 'text',
+          content: text,
+          status: 'failed',
+          metadata: {
+            source: 'julia-electron-local',
+            projection_state: 'failed',
+            error: error.message,
+          },
+        }).catch((projectionError) => {
+          console.warn('[V2_LOCAL_PROJECTION_FAILED]', projectionError.message);
+        });
+      }
+      userMessage.dataset.status = 'failed';
+      delete userMessage.dataset.pending;
+      userMessage.classList.add('error');
+      const roleEl = userMessage.querySelector('.role');
+      if (roleEl) roleEl.textContent = 'Tony · Failed';
+    }
     if (activeTextStreams.has(requestId)) {
       setMessageContent(pending, `Text mode request failed: ${error.message}`);
       pending.classList.add('error');

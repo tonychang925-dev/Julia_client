@@ -115,14 +115,20 @@ async function getConversationMessages(conversationId, options = {}) {
     throw new Error('Julia conversation sync response did not contain messages');
   }
 
-  const messages = data.messages.filter((message) => (
-    message
-    && message.status === 'completed'
-    && ['user', 'assistant'].includes(message.role)
-    && typeof message.message_id === 'string'
-    && typeof message.turn_id === 'string'
-    && typeof message.content === 'string'
-  ));
+  const messages = data.messages.filter((message) => {
+    if (
+      !message
+      || !['user', 'assistant'].includes(message.role)
+      || typeof message.message_id !== 'string'
+      || typeof message.turn_id !== 'string'
+      || typeof message.content !== 'string'
+    ) return false;
+
+    if (message.status === 'completed') return true;
+    return message.role === 'assistant'
+      && message.status === 'interrupted'
+      && message.content.trim().length > 0;
+  });
   return {
     conversation_id: id,
     title: typeof data.title === 'string' ? data.title : 'New Conversation',

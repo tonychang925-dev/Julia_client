@@ -148,7 +148,7 @@ test('CLIENT-C1-TC05 sends JSON and SSE turns through the Julia-native endpoint'
   }
 });
 
-test('CLIENT-C1B-TC01 fetches only completed canonical messages', async () => {
+test('CLIENT-C10-E2-TC01 fetches completed and canonical interrupted assistant messages', async () => {
   const server = http.createServer((_request, response) => {
     response.writeHead(200, { 'Content-Type': 'application/json' });
     response.end(JSON.stringify({
@@ -159,6 +159,11 @@ test('CLIENT-C1B-TC01 fetches only completed canonical messages', async () => {
           message_id: 'msg-user', conversation_id: 'conv-voice', turn_id: 'v1',
           role: 'user', modality: 'voice', content: '代号是什么？', status: 'completed',
           created_at: '2026-08-09T15:00:00+08:00',
+        },
+        {
+          message_id: 'msg-interrupted', conversation_id: 'conv-voice', turn_id: 'v1',
+          role: 'assistant', modality: 'voice', content: '部分回答', status: 'interrupted',
+          created_at: '2026-08-09T15:00:00.500+08:00',
         },
         {
           message_id: 'msg-pending', conversation_id: 'conv-voice', turn_id: 'v2',
@@ -173,9 +178,11 @@ test('CLIENT-C1B-TC01 fetches only completed canonical messages', async () => {
     const result = await getConversationMessages('conv-voice', {
       brainEndpoint: `http://127.0.0.1:${server.address().port}`,
     });
-    assert.equal(result.messages.length, 1);
+    assert.equal(result.messages.length, 2);
     assert.equal(result.messages[0].message_id, 'msg-user');
     assert.equal(result.messages[0].modality, 'voice');
+    assert.equal(result.messages[1].message_id, 'msg-interrupted');
+    assert.equal(result.messages[1].status, 'interrupted');
   } finally {
     await new Promise((resolve) => server.close(resolve));
   }
@@ -189,7 +196,8 @@ test('CLIENT-C1B-TC02 canonical identity replaces optimistic cache entries', () 
     const conversation = store.createConversation('Voice continuity');
     store.addMessage(conversation.conversation_id, {
       message_id: 'local-msg', turn_id: 'voice-turn-1', role: 'user',
-      modality: 'voice', content: 'local transcript', status: 'completed',
+      modality: 'voice', content: 'local transcript', status: 'pending',
+      metadata: { source: 'julia-electron-local', projection_state: 'local_pending' },
     });
 
     const result = store.reconcileCanonicalMessages(conversation.conversation_id, {
@@ -213,9 +221,65 @@ test('CLIENT-C1B-TC02 canonical identity replaces optimistic cache entries', () 
     assert.equal(result.conversation.messages.length, 2);
     assert.equal(result.conversation.messages[0].message_id, 'canonical-msg');
     assert.equal(result.conversation.messages[0].content, 'canonical transcript');
+    assert.equal(result.conversation.messages[0].status, 'completed');
+    assert.equal(result.conversation.messages[0].metadata.source, 'julia-core-canonical');
     assert.equal(result.conversation.messages[1].message_id, 'canonical-reply');
     assert.equal(result.reconciliation.inserted, 1);
     assert.equal(result.reconciliation.updated, 1);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('CLIENT-C10-E1-TC01 failed optimistic projection remains local and idempotent', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'julia-client-e1-'));
+  try {
+    const store = new ConversationStore(dir);
+    store.load();
+    const conversation = store.createConversation('Projection state');
+    const pending = store.addMessage(conversation.conversation_id, {
+      message_id: 'local-user', turn_id: 'turn-failed', role: 'user',
+      modality: 'text', content: 'will fail', status: 'pending',
+      metadata: { source: 'julia-electron-local', projection_state: 'local_pending' },
+    });
+    const failed = store.addMessage(conversation.conversation_id, {
+      turn_id: 'turn-failed', role: 'user', modality: 'text', content: 'will fail',
+      status: 'failed',
+      metadata: { source: 'julia-electron-local', projection_state: 'failed' },
+    });
+
+    assert.equal(failed.message_id, pending.message_id);
+    assert.equal(failed.status, 'failed');
+    assert.equal(failed.metadata.projection_state, 'failed');
+    assert.equal(store.getConversation(conversation.conversation_id).messages.length, 1);
+
+    const reconciled = store.reconcileCanonicalMessages(conversation.conversation_id, { messages: [] });
+    assert.equal(reconciled.conversation.messages.length, 0);
+    assert.equal(reconciled.reconciliation.removed_local, 1);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('CLIENT-C10-E2-TC02 interrupted chronology survives repeated canonical reconcile', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'julia-client-e2-'));
+  try {
+    const store = new ConversationStore(dir);
+    store.load();
+    const conversation = store.createConversation('Interrupted history');
+    const canonical = {
+      messages: [
+        { message_id: 'm1', turn_id: 't1', role: 'user', modality: 'voice', content: 'one', status: 'completed', created_at: '2026-08-09T10:00:00Z' },
+        { message_id: 'm2', turn_id: 't1', role: 'assistant', modality: 'voice', content: 'partial', status: 'interrupted', created_at: '2026-08-09T10:00:01Z' },
+        { message_id: 'm3', turn_id: 't2', role: 'user', modality: 'text', content: 'two', status: 'completed', created_at: '2026-08-09T10:00:02Z' },
+        { message_id: 'm4', turn_id: 't2', role: 'assistant', modality: 'text', content: 'done', status: 'completed', created_at: '2026-08-09T10:00:03Z' },
+      ],
+    };
+
+    store.reconcileCanonicalMessages(conversation.conversation_id, canonical);
+    const repeated = store.reconcileCanonicalMessages(conversation.conversation_id, canonical);
+    assert.deepEqual(repeated.conversation.messages.map((message) => message.message_id), ['m1', 'm2', 'm3', 'm4']);
+    assert.deepEqual(repeated.conversation.messages.map((message) => message.status), ['completed', 'interrupted', 'completed', 'completed']);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

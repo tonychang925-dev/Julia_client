@@ -298,6 +298,11 @@ button, input { font: inherit; }
   background: rgba(255, 103, 103, .08);
 }
 .message[data-pending="true"] .bubble { color: var(--muted); }
+.message.interrupted .bubble {
+  border-color: rgba(255, 191, 92, .4);
+  background: rgba(255, 191, 92, .07);
+}
+.message.interrupted .role { color: #e3ad5c; }
 
 .message-text + .code-block,
 .code-block + .message-text {

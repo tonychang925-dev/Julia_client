@@ -274,12 +274,16 @@ class ConversationStore {
 
     let inserted = 0;
     let updated = 0;
+    let removedLocal = 0;
     const canonicalMessages = Array.isArray(canonical.messages) ? canonical.messages : [];
 
     for (const message of canonicalMessages) {
+      const canonicalStatus = String(message?.status || '');
+      const acceptedStatus = canonicalStatus === 'completed'
+        || (message?.role === 'assistant' && canonicalStatus === 'interrupted');
       if (
         !message
-        || message.status !== 'completed'
+        || !acceptedStatus
         || !['user', 'assistant'].includes(message.role)
         || !String(message.message_id || '').trim()
         || !String(message.turn_id || '').trim()
@@ -293,7 +297,7 @@ class ConversationStore {
         role: message.role,
         modality: message.modality === 'voice' ? 'voice' : 'text',
         content: String(message.content),
-        status: 'completed',
+        status: canonicalStatus,
         created_at: message.created_at || nowIso(),
         metadata: { source: 'julia-core-canonical' },
       };
@@ -311,6 +315,14 @@ class ConversationStore {
       }
     }
 
+    conversation.messages = conversation.messages.filter((message) => {
+      const isUnconfirmedLocal = message.metadata?.source === 'julia-electron-local'
+        && ['pending', 'failed'].includes(message.status);
+      if (!isUnconfirmedLocal) return true;
+      removedLocal += 1;
+      return false;
+    });
+
     conversation.messages.sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)));
     if (canonical.title && canonical.title !== 'New Conversation') {
       conversation.title = canonical.title;
@@ -325,6 +337,7 @@ class ConversationStore {
         canonical_count: canonicalMessages.length,
         inserted,
         updated,
+        removed_local: removedLocal,
       },
     };
   }
