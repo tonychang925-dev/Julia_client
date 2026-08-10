@@ -412,7 +412,7 @@ async function resumeVoiceCapture() {
 }
 
 async function switchToTextMode(reason = 'text') {
-  if (voiceTransitionState === 'IDLE') {
+  if (voiceTransitionState === 'IDLE' || voiceTransitionState === 'ACTIVE') {
     voiceTransitionState = 'DRAINING';
     const done = (async () => {
       try {
