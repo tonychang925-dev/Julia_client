@@ -391,6 +391,8 @@ async function flushVoiceWorkspace(reason = 'text') {
     baseLastMessageId: committedLastMessageId,
   }, getVoiceTargetOrigin());
   await syncCanonicalConversation(conversationId, `voice-flush:${reason}`);
+  boundVoiceConversationId = null;
+  voiceWorkspaceSessionId = null;
   setVoiceLifecycleStatus('Voice conversation saved. Microphone is off.', 'idle');
   return { committedTurnIds, empty: turns.length === 0 };
 }
