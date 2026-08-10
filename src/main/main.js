@@ -300,15 +300,29 @@ ipcMain.handle('julia:conversation:search', async (_event, input) => {
   return getConversationStore().searchConversations(input?.query);
 });
 
+ipcMain.handle('julia:cache:status', async () => {
+  return getConversationStore().getCacheStatus();
+});
+
+ipcMain.handle('julia:cache:clear-local', async () => {
+  return getConversationStore().clearLocalCache();
+});
+
 ipcMain.handle('julia:conversation:sync', async (_event, input) => {
   const conversationId = String(input?.conversationId || '').trim();
   if (!conversationId) throw new Error('Conversation ID is required');
   const cached = getConversationStore().getConversation(conversationId);
-  const canonical = await ensureConversationMessages(
-    conversationId,
-    cached?.title || 'New Conversation',
-    getTextClientOptions()
-  );
+  let canonical;
+  try {
+    canonical = await ensureConversationMessages(
+      conversationId,
+      cached?.title || 'New Conversation',
+      getTextClientOptions()
+    );
+  } catch (error) {
+    getConversationStore().markConversationStale(conversationId, error.message);
+    throw error;
+  }
   return {
     ...getConversationStore().reconcileCanonicalMessages(conversationId, canonical),
     canonical: {

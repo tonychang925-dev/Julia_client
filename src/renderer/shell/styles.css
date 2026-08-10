@@ -565,3 +565,37 @@ button, input { font: inherit; }
   .thread, .composer { padding-left: 22px; padding-right: 22px; }
   .settings-grid { grid-template-columns: 1fr; }
 }
+
+.cache-banner {
+  margin: 0 0 24px;
+  padding: 12px 14px;
+  border: 1px solid rgba(255, 191, 92, .42);
+  border-radius: 14px;
+  color: #e3ad5c;
+  background: rgba(255, 191, 92, .08);
+  font-size: 13px;
+}
+
+.settings-help {
+  margin: -6px 0 12px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.settings-button-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.secondary-action.danger {
+  color: #ffb4b4;
+  border-color: rgba(255, 103, 103, .35);
+  background: rgba(255, 103, 103, .07);
+}
+
+.secondary-action.danger:hover {
+  border-color: rgba(255, 103, 103, .6);
+  background: rgba(255, 103, 103, .12);
+}

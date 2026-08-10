@@ -36,6 +36,10 @@ const launchAtLoginSetting = document.getElementById('launchAtLoginSetting');
 const brainEndpointSetting = document.getElementById('brainEndpointSetting');
 const brainStatusDetails = document.getElementById('brainStatusDetails');
 const refreshBrainStatusButton = document.getElementById('refreshBrainStatusButton');
+const copyDiagnosticsButton = document.getElementById('copyDiagnosticsButton');
+const cacheStatusDetails = document.getElementById('cacheStatusDetails');
+const reloadFromCoreButton = document.getElementById('reloadFromCoreButton');
+const clearLocalCacheButton = document.getElementById('clearLocalCacheButton');
 const globalShortcutSetting = document.getElementById('globalShortcutSetting');
 const windowRestoreSetting = document.getElementById('windowRestoreSetting');
 const trayEnabledSetting = document.getElementById('trayEnabledSetting');
@@ -53,6 +57,8 @@ let voiceLifecycleState = 'paused';
 const activeTextStreams = new Map();
 const pendingVoiceCommands = new Map();
 let canonicalSyncTimer = null;
+let lastBrainStatus = null;
+let lastCacheStatus = null;
 const canonicalSyncInFlight = new Map();
 let boundVoiceConversationId = null;
 let voiceWorkspaceSessionId = null;
@@ -407,6 +413,18 @@ function openSettingsPanel() {
   setSettingsError('');
   settingsPanel.classList.remove('hidden');
   brainEndpointSetting.focus();
+  refreshBrainStatus().catch((error) => {
+    renderBrainStatus({
+      connected: false,
+      endpoint: brainEndpointSetting.value,
+      status: 'offline',
+      error: error.message,
+      checked_at: new Date().toISOString(),
+    });
+  });
+  refreshCacheStatus().catch((error) => {
+    renderCacheStatus({ error: error.message });
+  });
 }
 
 function closeSettingsPanel() {
@@ -415,14 +433,20 @@ function closeSettingsPanel() {
 }
 
 function renderBrainStatus(status) {
+  lastBrainStatus = status;
   brainStatusDot.classList.toggle('offline', !status.connected);
   brainStatusText.textContent = status.connected ? 'Julia Brain' : 'Brain Offline';
 
+  const unavailable = 'unavailable';
   const lines = [
-    `Endpoint: ${status.endpoint}`,
-    `Status: ${status.status}`,
-    status.contract_version ? `Contract: ${status.contract_version}` : null,
-    status.julia_core ? `Julia Core: ${status.julia_core}` : null,
+    `Endpoint: ${status.endpoint || unavailable}`,
+    `Status: ${status.status || unavailable}`,
+    `Contract: ${status.contract_version || unavailable}`,
+    `Julia Core: ${status.julia_core || unavailable}`,
+    `Service version: ${status.service_version || unavailable}`,
+    `Architecture: ${status.architecture_version || unavailable}`,
+    `Build: ${status.build || unavailable}`,
+    `Commit: ${status.commit || unavailable}`,
     status.error ? `Error: ${status.error}` : null,
     status.checked_at ? `Last check: ${new Date(status.checked_at).toLocaleString()}` : null,
   ].filter(Boolean);
@@ -445,6 +469,7 @@ async function restoreSettingsState() {
     showSurface('text');
   }
   await refreshBrainStatus();
+  await refreshCacheStatus();
 }
 
 function escapeHtml(value) {
@@ -570,6 +595,13 @@ function appendMessage(role, content, options) {
 
 function renderConversationMessages(conversation) {
   thread.replaceChildren();
+
+  if (conversation?.projection?.stale) {
+    const stale = document.createElement('div');
+    stale.className = 'cache-banner';
+    stale.textContent = `Offline/stale local projection. Last Core sync failed${conversation.projection.last_reconcile_error ? `: ${conversation.projection.last_reconcile_error}` : '.'}`;
+    thread.appendChild(stale);
+  }
 
   const messages = conversation?.messages || [];
   if (messages.length === 0) {
@@ -732,6 +764,7 @@ async function ensureActiveConversation() {
     renderConversationMessages(conversation);
   }
   await refreshConversationList();
+  await refreshCacheStatus();
   return activeConversationId;
 }
 
@@ -752,6 +785,7 @@ async function openConversation(conversationId) {
     renderConversationMessages(conversation);
   }
   await refreshConversationList();
+  await refreshCacheStatus();
 }
 
 async function createNewConversation() {
@@ -765,6 +799,7 @@ async function createNewConversation() {
   activeConversationId = conversation.conversation_id;
   renderConversationMessages(conversation);
   await refreshConversationList();
+  await refreshCacheStatus();
   composerInput.focus();
 }
 
@@ -779,6 +814,7 @@ async function renameConversation(conversationId, currentTitle) {
     renderConversationMessages(updated);
   }
   await refreshConversationList();
+  await refreshCacheStatus();
 }
 
 async function deleteConversation(conversationId) {
@@ -790,6 +826,69 @@ async function deleteConversation(conversationId) {
   activeConversationId = next.conversation_id;
   renderConversationMessages(next);
   await refreshConversationList();
+  await refreshCacheStatus();
+}
+
+async function refreshCacheStatus() {
+  if (!textClient.getCacheStatus) return null;
+  const status = await textClient.getCacheStatus();
+  lastCacheStatus = status;
+  renderCacheStatus(status);
+  return status;
+}
+
+function renderCacheStatus(status) {
+  if (!cacheStatusDetails) return;
+  if (!status) {
+    cacheStatusDetails.textContent = 'Local cache status unavailable.';
+    return;
+  }
+  cacheStatusDetails.textContent = [
+    'Authority: disposable projection',
+    `Conversations: ${status.conversation_count ?? 'unavailable'}`,
+    `Messages: ${status.message_count ?? 'unavailable'}`,
+    `Stale conversations: ${status.stale_conversation_count ?? 'unavailable'}`,
+    `Current conversation: ${status.current_conversation_id || 'unavailable'}`,
+    `Last cleared: ${status.last_cleared_at || 'never'}`,
+    `Cache file: ${status.file_path || 'unavailable'}`,
+  ].join('\n');
+}
+
+async function reloadActiveConversationFromCore(reason = 'manual-reload') {
+  const conversationId = await ensureActiveConversation();
+  const result = await syncCanonicalConversation(conversationId, reason);
+  await refreshCacheStatus();
+  return result;
+}
+
+async function clearLocalCacheAndReload() {
+  const conversationId = activeConversationId;
+  if (!conversationId) throw new Error('No active conversation to reload after cache clear');
+  const ok = window.confirm('Clear only the local Electron cache? Julia Core conversation history will not be deleted.');
+  if (!ok) return null;
+  await textClient.clearLocalCache();
+  await refreshCacheStatus();
+  activeConversationId = conversationId;
+  const result = await syncCanonicalConversation(conversationId, 'clear-local-cache');
+  await refreshConversationList();
+  await refreshCacheStatus();
+  return result;
+}
+
+
+function buildDiagnosticsText() {
+  return JSON.stringify({
+    brain: lastBrainStatus || null,
+    cache: lastCacheStatus || null,
+    activeConversationId,
+    mode: currentMode,
+    voice: {
+      state: voiceLifecycleState,
+      boundConversationId: boundVoiceConversationId,
+      workspaceSessionId: voiceWorkspaceSessionId,
+    },
+    generated_at: new Date().toISOString(),
+  }, null, 2);
 }
 
 async function restoreConversationState() {
@@ -803,6 +902,7 @@ async function restoreConversationState() {
     renderConversationMessages(conversation);
   }
   await refreshConversationList();
+  await refreshCacheStatus();
 }
 
 function setComposerBusy(isBusy) {
@@ -1053,6 +1153,27 @@ refreshBrainStatusButton.addEventListener('click', () => {
       checked_at: new Date().toISOString(),
     });
   });
+});
+
+
+copyDiagnosticsButton?.addEventListener('click', async () => {
+  try {
+    await navigator.clipboard.writeText(buildDiagnosticsText());
+    copyDiagnosticsButton.textContent = 'Copied';
+    setTimeout(() => { copyDiagnosticsButton.textContent = 'Copy diagnostics'; }, 1200);
+  } catch (error) {
+    setSettingsError(`Copy diagnostics failed: ${error.message}`);
+  }
+});
+
+reloadFromCoreButton?.addEventListener('click', () => {
+  reloadActiveConversationFromCore('settings-reload')
+    .catch((error) => setSettingsError(`Reload from Core failed: ${error.message}`));
+});
+
+clearLocalCacheButton?.addEventListener('click', () => {
+  clearLocalCacheAndReload()
+    .catch((error) => setSettingsError(`Clear local cache failed: ${error.message}`));
 });
 
 settingsSaveButton.addEventListener('click', () => {

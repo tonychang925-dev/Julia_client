@@ -1,7 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 
-const STORE_VERSION = 1;
+const STORE_VERSION = 2;
 const DEFAULT_FILE_NAME = 'julia-conversations-v1.json';
 
 // UI cache only. Julia Core ConversationRuntime is the sole authority for
@@ -22,6 +22,16 @@ function deriveTitle(text) {
   return title.length > 48 ? `${title.slice(0, 48)}…` : title;
 }
 
+function normalizeProjectionMetadata(metadata = {}) {
+  return {
+    source: metadata.source || 'julia-electron-projection-cache',
+    authority: 'disposable_projection',
+    last_reconciled_at: metadata.last_reconciled_at || null,
+    last_reconcile_error: metadata.last_reconcile_error || null,
+    stale: Boolean(metadata.stale),
+  };
+}
+
 function normalizeConversation(conversation) {
   return {
     conversation_id: conversation.conversation_id,
@@ -29,6 +39,7 @@ function normalizeConversation(conversation) {
     title_updated_by_user: Boolean(conversation.title_updated_by_user),
     created_at: conversation.created_at || nowIso(),
     updated_at: conversation.updated_at || conversation.created_at || nowIso(),
+    projection: normalizeProjectionMetadata(conversation.projection),
     messages: Array.isArray(conversation.messages) ? conversation.messages : [],
   };
 }
@@ -41,6 +52,7 @@ function summarizeConversation(conversation, extra = {}) {
     created_at: normalized.created_at,
     updated_at: normalized.updated_at,
     message_count: normalized.messages.length,
+    projection: normalized.projection,
     ...extra,
   };
 }
@@ -53,6 +65,11 @@ class ConversationStore {
       version: STORE_VERSION,
       currentConversationId: null,
       conversations: [],
+      cache: {
+        kind: 'disposable_projection',
+        authority: 'non_canonical',
+        last_cleared_at: null,
+      },
     };
     this.loaded = false;
   }
@@ -68,13 +85,34 @@ class ConversationStore {
     }
 
     const raw = fs.readFileSync(this.filePath, 'utf8');
-    const parsed = JSON.parse(raw);
+    let parsed;
+    try {
+      parsed = JSON.parse(raw);
+    } catch (error) {
+      const corruptPath = `${this.filePath}.corrupt-${Date.now()}`;
+      fs.renameSync(this.filePath, corruptPath);
+      this.state.cache = {
+        kind: 'disposable_projection',
+        authority: 'non_canonical',
+        last_cleared_at: nowIso(),
+        recovered_from_corruption: path.basename(corruptPath),
+      };
+      this.loaded = true;
+      this.save();
+      return this.state;
+    }
     this.state = {
       version: STORE_VERSION,
       currentConversationId: parsed.currentConversationId || null,
       conversations: Array.isArray(parsed.conversations)
         ? parsed.conversations.map(normalizeConversation)
         : [],
+      cache: {
+        kind: 'disposable_projection',
+        authority: 'non_canonical',
+        last_cleared_at: parsed.cache?.last_cleared_at || null,
+        recovered_from_corruption: parsed.cache?.recovered_from_corruption || null,
+      },
     };
     this.loaded = true;
     return this.state;
@@ -103,6 +141,7 @@ class ConversationStore {
       title_updated_by_user: false,
       created_at: timestamp,
       updated_at: timestamp,
+      projection: normalizeProjectionMetadata(),
       messages: [],
     };
     this.state.conversations.unshift(conversation);
@@ -154,6 +193,56 @@ class ConversationStore {
       deleted_conversation_id: deleted.conversation_id,
       current_conversation: currentConversation,
     };
+  }
+
+  getCacheStatus() {
+    this.load();
+    const messageCount = this.state.conversations.reduce((total, conversation) => (
+      total + (Array.isArray(conversation.messages) ? conversation.messages.length : 0)
+    ), 0);
+    const staleCount = this.state.conversations.filter((conversation) => conversation.projection?.stale).length;
+    return {
+      kind: 'disposable_projection',
+      authority: 'non_canonical',
+      file_path: this.filePath,
+      conversation_count: this.state.conversations.length,
+      message_count: messageCount,
+      stale_conversation_count: staleCount,
+      current_conversation_id: this.state.currentConversationId,
+      last_cleared_at: this.state.cache?.last_cleared_at || null,
+      recovered_from_corruption: this.state.cache?.recovered_from_corruption || null,
+    };
+  }
+
+  clearLocalCache() {
+    this.load();
+    const previous = this.getCacheStatus();
+    this.state.conversations = [];
+    this.state.currentConversationId = null;
+    this.state.cache = {
+      kind: 'disposable_projection',
+      authority: 'non_canonical',
+      last_cleared_at: nowIso(),
+    };
+    this.save();
+    return {
+      cleared: true,
+      previous,
+      cache: this.getCacheStatus(),
+    };
+  }
+
+  markConversationStale(conversationId, error) {
+    this.load();
+    const conversation = this.getConversation(conversationId);
+    if (!conversation) return null;
+    conversation.projection = normalizeProjectionMetadata({
+      ...conversation.projection,
+      stale: true,
+      last_reconcile_error: error ? String(error) : null,
+    });
+    this.save();
+    return conversation;
   }
 
   searchConversations(query) {
@@ -267,6 +356,7 @@ class ConversationStore {
         title_updated_by_user: false,
         created_at: timestamp,
         updated_at: timestamp,
+        projection: normalizeProjectionMetadata(),
         messages: [],
       };
       this.state.conversations.unshift(conversation);
@@ -276,6 +366,13 @@ class ConversationStore {
     let updated = 0;
     let removedLocal = 0;
     const canonicalMessages = Array.isArray(canonical.messages) ? canonical.messages : [];
+
+    conversation.projection = normalizeProjectionMetadata({
+      ...conversation.projection,
+      stale: false,
+      last_reconciled_at: nowIso(),
+      last_reconcile_error: null,
+    });
 
     for (const message of canonicalMessages) {
       const canonicalStatus = String(message?.status || '');
@@ -351,4 +448,5 @@ module.exports = {
   ConversationStore,
   createConversationStore,
   deriveTitle,
+  normalizeProjectionMetadata,
 };

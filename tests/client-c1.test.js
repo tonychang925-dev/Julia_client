@@ -21,6 +21,7 @@ const {
   streamTextMessage,
 } = require('../src/main/text-client');
 const { ConversationStore } = require('../src/main/conversation-store');
+const { getBrainStatus } = require('../src/main/brain-status');
 
 test('CLIENT-C1-TC01 builds the frozen Julia-native turn contract without history', () => {
   const turn = normalizeTurnRequest({
@@ -398,5 +399,112 @@ test('CLIENT-C1B-R3-TC03 registers a local-only conversation before Voice bootst
     ]);
   } finally {
     await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+
+test('E4-AT03/E4-AT12 local cache clear is disposable and never uploads history', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'julia-client-e4-clear-'));
+  try {
+    const store = new ConversationStore(dir);
+    store.load();
+    const conversation = store.createConversation('Disposable cache');
+    store.addMessage(conversation.conversation_id, {
+      message_id: 'local-only', turn_id: 't-local', role: 'user', modality: 'text',
+      content: 'local projection only', status: 'pending',
+      metadata: { source: 'julia-electron-local', projection_state: 'local_pending' },
+    });
+    const before = store.getCacheStatus();
+    assert.equal(before.authority, 'non_canonical');
+    assert.equal(before.kind, 'disposable_projection');
+    assert.equal(before.message_count, 1);
+
+    const cleared = store.clearLocalCache();
+    assert.equal(cleared.cleared, true);
+    assert.equal(cleared.previous.message_count, 1);
+    assert.equal(cleared.cache.message_count, 0);
+    assert.equal(store.getCacheStatus().conversation_count, 0);
+
+    const restored = store.reconcileCanonicalMessages(conversation.conversation_id, {
+      title: 'Disposable cache',
+      messages: [{
+        message_id: 'core-msg', conversation_id: conversation.conversation_id,
+        turn_id: 't-core', role: 'user', modality: 'text', content: 'Core truth',
+        status: 'completed', created_at: '2026-08-10T00:00:00Z',
+      }],
+    });
+    assert.deepEqual(restored.conversation.messages.map((m) => m.message_id), ['core-msg']);
+    assert.equal(restored.conversation.messages[0].metadata.source, 'julia-core-canonical');
+    assert.equal(restored.conversation.messages.some((m) => m.message_id === 'local-only'), false);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('E4-AT04/E4-AT05 offline cache is marked stale then Core reconcile wins', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'julia-client-e4-stale-'));
+  try {
+    const store = new ConversationStore(dir);
+    store.load();
+    const conversation = store.createConversation('Offline projection');
+    store.addMessage(conversation.conversation_id, {
+      message_id: 'cached-core', turn_id: 't1', role: 'user', modality: 'text',
+      content: 'cached copy', status: 'completed', metadata: { source: 'julia-core-canonical' },
+    });
+
+    const stale = store.markConversationStale(conversation.conversation_id, 'Core offline');
+    assert.equal(stale.projection.stale, true);
+    assert.equal(stale.projection.last_reconcile_error, 'Core offline');
+    assert.equal(store.getCacheStatus().stale_conversation_count, 1);
+
+    const reconciled = store.reconcileCanonicalMessages(conversation.conversation_id, {
+      messages: [{
+        message_id: 'canonical-updated', conversation_id: conversation.conversation_id,
+        turn_id: 't1', role: 'user', modality: 'text', content: 'canonical copy',
+        status: 'completed', created_at: '2026-08-10T00:00:00Z',
+      }],
+    });
+    assert.equal(reconciled.conversation.projection.stale, false);
+    assert.equal(reconciled.conversation.projection.last_reconcile_error, null);
+    assert.equal(reconciled.conversation.messages.length, 1);
+    assert.equal(reconciled.conversation.messages[0].content, 'canonical copy');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('E4-AT10 Core discovery shows unavailable for missing provenance without fabrication', async () => {
+  const server = http.createServer((_request, response) => {
+    response.writeHead(200, { 'Content-Type': 'application/json' });
+    response.end(JSON.stringify({ status: 'ok', contract_version: '1.0.0' }));
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  try {
+    const status = await getBrainStatus(`http://127.0.0.1:${server.address().port}`);
+    assert.equal(status.connected, true);
+    assert.equal(status.contract_version, '1.0.0');
+    assert.equal(status.julia_core, null);
+    assert.equal(status.service_version, null);
+    assert.equal(status.architecture_version, null);
+    assert.equal(status.commit, null);
+    assert.equal(status.raw.status, 'ok');
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test('E4-AT11 corrupt local cache is discarded and rebuilt as disposable projection', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'julia-client-e4-corrupt-'));
+  try {
+    fs.writeFileSync(path.join(dir, 'julia-conversations-v1.json'), '{not-json', 'utf8');
+    const store = new ConversationStore(dir);
+    const state = store.load();
+    assert.equal(state.conversations.length, 0);
+    assert.equal(state.cache.kind, 'disposable_projection');
+    assert.match(state.cache.recovered_from_corruption, /^julia-conversations-v1\.json\.corrupt-/);
+    assert.equal(store.getCacheStatus().message_count, 0);
+    assert.equal(fs.readdirSync(dir).some((name) => name.includes('.corrupt-')), true);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
   }
 });
