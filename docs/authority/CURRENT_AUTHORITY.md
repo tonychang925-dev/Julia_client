@@ -6,7 +6,8 @@ REPOSITORY: Julia_client
 LOCAL PATH: /Users/admin/julia_electron_v2
 ROLE: Electron desktop client for Julia Voice/Text interaction
 AUTHORITATIVE BRANCH: codex/bugfix/electron-c10-c11-projection
-AUTHORITATIVE COMMIT AT CLOSEOUT: 139983cffa41402b307e03ade56acd16487e5209 plus this CC-1 successor commit
+AUTHORITATIVE CODE COMMIT AT CC-1 SOURCE CLOSEOUT: 56cac30f3f467d28f9eacca0e4a4b6167038c9d4
+AUTHORITATIVE DOC HEAD: 56cac30f3f467d28f9eacca0e4a4b6167038c9d4 plus this metadata successor
 
 ## Repository identity
 
