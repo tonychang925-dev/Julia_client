@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+set -euo pipefail
+ENV_FILE="${JULIA_TUNNEL_ENV:-$HOME/.julia_ops/tunnel.env}"
+if [[ -f "$ENV_FILE" ]]; then
+  set -a
+  # shellcheck disable=SC1090
+  source "$ENV_FILE"
+  set +a
+fi
+: "${AUTODL_HOST:?missing AUTODL_HOST}"
+: "${AUTODL_PORT:?missing AUTODL_PORT}"
+: "${AUTODL_USER:=root}"
+: "${AUTODL_IDENTITY_FILE:?missing AUTODL_IDENTITY_FILE}"
+: "${VOICE_FRONTEND_BIND:=127.0.0.1}"
+: "${VOICE_FRONTEND_PORT:=7860}"
+: "${VOICE_S2S_BIND:=127.0.0.1}"
+: "${VOICE_S2S_PORT:=8765}"
+if [[ ! -r "$AUTODL_IDENTITY_FILE" ]]; then
+  echo "identity file not readable: $AUTODL_IDENTITY_FILE" >&2
+  exit 2
+fi
+exec /usr/bin/ssh \
+  -i "$AUTODL_IDENTITY_FILE" \
+  -N -T \
+  -o BatchMode=yes \
+  -o ExitOnForwardFailure=yes \
+  -o ServerAliveInterval=15 \
+  -o ServerAliveCountMax=3 \
+  -o TCPKeepAlive=yes \
+  -o ConnectTimeout=10 \
+  -o StrictHostKeyChecking=accept-new \
+  -L "${VOICE_FRONTEND_BIND}:${VOICE_FRONTEND_PORT}:127.0.0.1:${VOICE_FRONTEND_PORT}" \
+  -L "${VOICE_S2S_BIND}:${VOICE_S2S_PORT}:127.0.0.1:${VOICE_S2S_PORT}" \
+  -p "$AUTODL_PORT" \
+  "${AUTODL_USER}@${AUTODL_HOST}"

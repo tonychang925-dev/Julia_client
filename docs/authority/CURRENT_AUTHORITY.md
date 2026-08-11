@@ -52,7 +52,7 @@ STATUS: SOURCE COMMITTED / AWAITING VOICE ARTIFACT + DEPLOYMENT
 
 C2 Electron source commit:
 
-- `e5553eb0e302b6c66d5b9aa84ecb9111ef31f905`
+- `d8ec4e28d178ccb31b361efdfb6dd81d33227d0b`
 
 Required behavior:
 
@@ -60,6 +60,36 @@ Required behavior:
 - Electron waits for `julia.voice.conversation.bound` ACK.
 - Electron marks `boundVoiceConversationId` only after ACK `conversationId` exactly equals requested C.
 - Electron does not send copied `messages[]` or `baseLastMessageId` to Voice.
+
+
+## Tunnel lifecycle authority (TUNNEL-L1)
+
+STATUS: SOURCE PACKAGE PENDING DEPLOYMENT / PRODUCTION AUTHORITY AFTER INSTALL
+
+Voice local transport tunnel purpose:
+
+- Mac `127.0.0.1:7860` -> AutoDL `127.0.0.1:7860` for Voice frontend.
+- Mac `127.0.0.1:8765` -> AutoDL `127.0.0.1:8765` for S2S WebSocket/API.
+
+CANONICAL (version-controlled):
+
+- `deploy/mac/start-voice-tunnels`
+- `deploy/mac/com.julia.tunnel.voice-local.plist`
+- `deploy/mac/com.julia.tunnel.voice-local.watchdog.plist`
+- `deploy/mac/health-voice-tunnels`
+- `deploy/mac/voice-tunnel.env.example`
+
+LOCAL OPERATIONAL CONFIG / NOT COMMITTED:
+
+- `/Users/admin/.julia_ops/tunnel.env`
+- `/Users/admin/.ssh/julia_autodl_ed25519` mode `600`
+
+Production lifecycle authority after TUNNEL-L1 install:
+
+- launchd label `com.julia.tunnel.voice-local` owns the SSH process.
+- launchd label `com.julia.tunnel.voice-local.watchdog` owns health checks and restarts via `launchctl kickstart -k`.
+- Manual SSH tunnel commands are HISTORICAL / NON-AUTHORITATIVE.
+- Watchdog must not spawn ad-hoc SSH; it may only restart the canonical launchd service.
 
 ## Current production code paths
 
