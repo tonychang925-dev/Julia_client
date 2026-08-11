@@ -16,7 +16,7 @@
     if (/bootstrap|binding|loading/.test(raw)) return 'bootstrapping';
     if (/resume|starting/.test(raw)) return 'resuming';
     if (/pause|releas/.test(raw)) return 'pausing';
-    if (/drain|settling|finishing|not-settled|response[.-]done|response[.-]finished/.test(raw) || /not settled/i.test(message)) return 'draining';
+    if (/drain|settling|finishing|not-settled|response[.-]done|response[.-]finished|audio[.-]to[.-]settle/.test(raw) || /not settled|audio to settle/i.test(message)) return 'draining';
     if (/flush|saving|commit/.test(raw)) return 'flushing';
     if (/speech|vad/.test(raw)) return 'speech';
     if (/process|thinking|generat|transcrib|asr|stt/.test(raw)) return 'processing';
@@ -31,16 +31,16 @@
     const message = String(payload.message || '');
     const map = {
       unbound: ['Not bound', 'Voice needs the active Core conversation before microphone capture.'],
-      bootstrapping: ['Preparing', 'Loading the Core conversation snapshot into the Voice workspace.'],
+      bootstrapping: ['Preparing', 'Binding Voice to the active Core conversation.'],
       idle: ['Idle', 'Microphone is off.'],
-      resuming: ['Starting', 'Attaching microphone after Voice workspace is ready.'],
+      resuming: ['Starting', 'Attaching microphone after Core conversation binding is ready.'],
       listening: ['Listening', 'Microphone is active.'],
-      speech: ['Speech detected', 'Listening to Tony; transcript is still Voice workspace state.'],
+      speech: ['Speech detected', 'Listening to Tony; Voice is attached to the Core conversation.'],
       processing: ['Thinking', 'Voice is processing speech/assistant generation.'],
       speaking: ['Speaking', 'Julia audio may still be playing.'],
-      draining: ['Finishing…', 'Waiting for Voice generation/audio/workspace to settle before switching modes.'],
+      draining: ['Finishing…', 'Waiting for Voice generation/audio to settle before switching modes.'],
       pausing: ['Releasing mic', 'Microphone capture is being released.'],
-      flushing: ['Saving Voice', 'Final Voice turns are being committed to Core canonical conversation.'],
+      flushing: ['Syncing Voice', 'Refreshing Core canonical conversation projection.'],
       error: ['Voice error', message || 'Voice is in a recoverable error state.'],
     };
     const [label, detail] = map[normalized] || ['Voice', message || 'Voice state unavailable.'];
@@ -58,7 +58,7 @@
   }
 
   function isVoiceWorkspaceNotSettled(error) {
-    return /workspace is not settled|not settled|draining/i.test(String(error?.message || error || ''));
+    return /workspace is not settled|not settled|draining|audio to settle/i.test(String(error?.message || error || ''));
   }
 
   return {

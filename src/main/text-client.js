@@ -18,15 +18,6 @@ function buildConversationMessagesApiUrl(brainEndpoint, conversationId) {
   ).toString();
 }
 
-function buildExternalTurnsApiUrl(brainEndpoint, conversationId) {
-  const id = String(conversationId || '').trim();
-  if (!id) throw new Error('Conversation ID is required');
-  return new URL(
-    `/internal/v1/conversations/${encodeURIComponent(id)}/external-turns`,
-    brainEndpoint || DEFAULT_BRAIN_ENDPOINT
-  ).toString();
-}
-
 function buildConversationsApiUrl(brainEndpoint) {
   return new URL('/internal/v1/conversations', brainEndpoint || DEFAULT_BRAIN_ENDPOINT).toString();
 }
@@ -155,38 +146,8 @@ async function ensureConversationMessages(conversationId, title = 'New Conversat
   return getConversationMessages(conversationId, options);
 }
 
-async function commitExternalTurns(input, options = {}) {
-  const conversationId = String(input?.conversationId || '').trim();
-  const turns = Array.isArray(input?.turns) ? input.turns : [];
-  if (!conversationId) throw new Error('Conversation ID is required');
-  if (!turns.length) return {
-    conversation_id: conversationId,
-    appended_turn_ids: [],
-    skipped_turn_ids: [],
-    empty: true,
-  };
-  const url = buildExternalTurnsApiUrl(options.brainEndpoint, conversationId);
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-    body: JSON.stringify({
-      source: 'voice-s2s',
-      source_session_id: String(input.voiceSessionId || ''),
-      base_last_message_id: String(input.baseLastMessageId || ''),
-      turns,
-    }),
-  });
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    const error = new Error(data.error || `Voice workspace commit failed: HTTP ${response.status}`);
-    error.code = data.code || `http_${response.status}`;
-    error.status = response.status;
-    throw error;
-  }
-  if (data.conversation_id !== conversationId) {
-    throw new Error(`Voice workspace commit mismatch: ${data.conversation_id || 'missing'} != ${conversationId}`);
-  }
-  return data;
+async function commitExternalTurns() {
+  throw new Error('CC-1: Electron must not commit Voice workspace/external turns; Voice turns must flow S2S → Brain → ConversationRuntime under canonical conversation_id');
 }
 
 async function sendTextMessage(input, options = {}) {
@@ -347,7 +308,6 @@ module.exports = {
   buildConversationDetailApiUrl,
   buildConversationsApiUrl,
   buildConversationTurnApiUrl,
-  buildExternalTurnsApiUrl,
   buildTurnBody,
   getConversationTurnApiTemplate,
   getConversationMessages,

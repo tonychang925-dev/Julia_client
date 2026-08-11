@@ -9,7 +9,6 @@ const {
   buildConversationMessagesApiUrl,
   buildConversationDetailApiUrl,
   buildConversationTurnApiUrl,
-  buildExternalTurnsApiUrl,
   commitExternalTurns,
   ensureConversationMessages,
   buildTurnBody,
@@ -291,32 +290,9 @@ test('CLIENT-C10-E2-TC02 interrupted chronology survives repeated canonical reco
   }
 });
 
-test('CLIENT-C1B-R3-TC01 commits Voice delta through the frozen external-turns contract', async () => {
-  let observed = null;
-  const server = http.createServer((request, response) => {
-    let body = '';
-    request.setEncoding('utf8');
-    request.on('data', (chunk) => { body += chunk; });
-    request.on('end', () => {
-      observed = { url: request.url, body: JSON.parse(body) };
-      response.writeHead(200, { 'Content-Type': 'application/json' });
-      response.end(JSON.stringify({
-        conversation_id: 'conv-A',
-        appended_turn_ids: ['voice:vws:0001'],
-        skipped_turn_ids: [],
-        message_count: 4,
-        last_message_id: 'msg-4',
-      }));
-    });
-  });
-  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
-  const endpoint = `http://127.0.0.1:${server.address().port}`;
-  try {
-    assert.equal(
-      buildExternalTurnsApiUrl(endpoint, 'conv-A'),
-      `${endpoint}/internal/v1/conversations/conv-A/external-turns`
-    );
-    const result = await commitExternalTurns({
+test('CC-1-TC01 rejects Voice external-turn shadow commits', async () => {
+  await assert.rejects(
+    commitExternalTurns({
       conversationId: 'conv-A',
       voiceSessionId: 'vws',
       baseLastMessageId: 'msg-2',
@@ -324,43 +300,16 @@ test('CLIENT-C1B-R3-TC01 commits Voice delta through the frozen external-turns c
         turn_id: 'voice:vws:0001', modality: 'voice', user_content: '问题',
         assistant_content: '回答', assistant_status: 'completed',
       }],
-    }, { brainEndpoint: endpoint });
-    assert.deepEqual(result.appended_turn_ids, ['voice:vws:0001']);
-    assert.equal(observed.url, '/internal/v1/conversations/conv-A/external-turns');
-    assert.deepEqual(observed.body, {
-      source: 'voice-s2s',
-      source_session_id: 'vws',
-      base_last_message_id: 'msg-2',
-      turns: [{
-        turn_id: 'voice:vws:0001', modality: 'voice', user_content: '问题',
-        assistant_content: '回答', assistant_status: 'completed',
-      }],
-    });
-  } finally {
-    await new Promise((resolve) => server.close(resolve));
-  }
+    }, { brainEndpoint: 'http://127.0.0.1:1' }),
+    /CC-1: Electron must not commit Voice workspace\/external turns/
+  );
 });
 
-test('CLIENT-C1B-R3-TC02 surfaces Core conversation_advanced without local fallback', async () => {
-  const server = http.createServer((_request, response) => {
-    response.writeHead(409, { 'Content-Type': 'application/json' });
-    response.end(JSON.stringify({ code: 'conversation_advanced', error: 'stale base cursor' }));
-  });
-  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
-  try {
-    await assert.rejects(
-      commitExternalTurns({
-        conversationId: 'conv-A', voiceSessionId: 'vws', baseLastMessageId: 'old',
-        turns: [{ turn_id: 'voice:vws:0001', modality: 'voice', user_content: 'question' }],
-      }, { brainEndpoint: `http://127.0.0.1:${server.address().port}` }),
-      (error) => error.code === 'conversation_advanced' && error.status === 409
-    );
-  } finally {
-    await new Promise((resolve) => server.close(resolve));
-  }
+test('CC-1-TC02 external-turns endpoint is not constructed by Electron client', () => {
+  assert.equal(Object.prototype.hasOwnProperty.call(require('../src/main/text-client'), 'buildExternalTurnsApiUrl'), false);
 });
 
-test('CLIENT-C1B-R3-TC03 registers a local-only conversation before Voice bootstrap', async () => {
+test('CC-1-TC03 registers a local-only conversation before Voice bind', async () => {
   let exists = false;
   const requests = [];
   const server = http.createServer((request, response) => {
@@ -590,7 +539,7 @@ test('VOICE-UX-TC01 maps body states without creating cognition authority', () =
   assert.deepEqual(describeVoiceState('speech_detected').state, 'speech');
   assert.deepEqual(describeVoiceState('response.done').state, 'draining');
   assert.deepEqual(describeVoiceState('audio_playing').state, 'speaking');
-  assert.deepEqual(describeVoiceState('workspace is not settled').state, 'draining');
+  assert.deepEqual(describeVoiceState('audio to settle').state, 'draining');
   assert.equal(describeVoiceState('draining').detail.includes('settle'), true);
 });
 
@@ -605,7 +554,7 @@ test('VOICE-UX-TC02 disables conflicting controls during Voice busy phases', () 
 });
 
 test('VOICE-UX-TC03 classifies not-settled release failure as recoverable DRAINING UX', () => {
-  assert.equal(isVoiceWorkspaceNotSettled(new Error('Voice workspace is not settled')), true);
+  assert.equal(isVoiceWorkspaceNotSettled(new Error('Voice audio to settle')), true);
   assert.equal(isVoiceWorkspaceNotSettled('draining before flush'), true);
   assert.equal(isVoiceWorkspaceNotSettled(new Error('Microphone access denied')), false);
   const denied = describeVoiceState('error', { message: 'Microphone access denied: Permission denied' });
