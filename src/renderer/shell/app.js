@@ -288,15 +288,27 @@ async function bindVoiceConversation(conversationId = activeConversationId) {
   ensureVoiceLoaded();
   await waitForVoiceFrameReady();
   const requestId = createRequestId();
-  voiceFrame.contentWindow.postMessage({
+  const message = {
     source: 'julia-electron-v2',
     type: 'julia.voice.conversation.bind',
     requestId,
     conversationId: targetId,
-  }, getVoiceTargetOrigin());
+  };
+  const ack = await new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      pendingVoiceCommands.delete(requestId);
+      reject(new Error(`Voice conversation bind timed out: ${targetId}`));
+    }, 30000);
+    pendingVoiceCommands.set(requestId, { resolve, reject, timeout });
+    voiceFrame.contentWindow.postMessage(message, getVoiceTargetOrigin());
+  });
+  if (!ack?.ok) throw new Error(ack?.error || 'Voice conversation bind failed');
+  if (String(ack.conversationId || '').trim() !== targetId) {
+    throw new Error(`Voice bind acknowledged another conversation: ${ack.conversationId || 'missing'} != ${targetId}`);
+  }
   boundVoiceConversationId = targetId;
   setVoiceLifecycleStatus('Voice bound to Core conversation. Microphone is off.', 'idle');
-  return { conversationId: targetId };
+  return { conversationId: targetId, acknowledged: true };
 }
 
 async function bootstrapVoiceWorkspace(conversationId = activeConversationId) {

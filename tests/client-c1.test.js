@@ -561,3 +561,20 @@ test('VOICE-UX-TC03 classifies not-settled release failure as recoverable DRAINI
   assert.equal(denied.state, 'error');
   assert.equal(denied.label, 'Voice error');
 });
+
+test('CC-1-C2 Electron waits for Voice bind acknowledgement before marking bound', () => {
+  const source = fs.readFileSync(path.join(__dirname, '../src/renderer/shell/app.js'), 'utf8');
+  const bindStart = source.indexOf('async function bindVoiceConversation');
+  const bindEnd = source.indexOf('async function bootstrapVoiceWorkspace', bindStart);
+  const bindSource = source.slice(bindStart, bindEnd);
+
+  assert.match(bindSource, /type: 'julia\.voice\.conversation\.bind'/);
+  assert.match(bindSource, /pendingVoiceCommands\.set\(requestId, \{ resolve, reject, timeout \}\)/);
+  assert.match(bindSource, /const ack = await new Promise/);
+  assert.match(bindSource, /if \(!ack\?\.ok\) throw new Error/);
+  assert.match(bindSource, /ack\.conversationId[\s\S]*!== targetId/);
+  assert.match(bindSource, /boundVoiceConversationId = targetId/);
+  assert.ok(bindSource.indexOf('const ack = await new Promise') < bindSource.indexOf('boundVoiceConversationId = targetId'));
+  assert.doesNotMatch(bindSource, /messages\s*:/);
+  assert.doesNotMatch(bindSource, /baseLastMessageId/);
+});
