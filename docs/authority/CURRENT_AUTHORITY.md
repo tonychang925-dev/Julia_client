@@ -7,7 +7,7 @@ LOCAL PATH: /Users/admin/julia_electron_v2
 ROLE: Electron desktop client for Julia Voice/Text interaction
 AUTHORITATIVE BRANCH: codex/bugfix/electron-c10-c11-projection
 AUTHORITATIVE CODE COMMIT AT CC-1 SOURCE CLOSEOUT: 56cac30f3f467d28f9eacca0e4a4b6167038c9d4
-AUTHORITATIVE DOC HEAD: 56cac30f3f467d28f9eacca0e4a4b6167038c9d4 plus this metadata successor
+AUTHORITATIVE DOC HEAD: 381484ea03746456e7e5eed6adb4946e9d300cca plus C2 metadata successor
 
 ## Repository identity
 
@@ -45,6 +45,21 @@ DERIVED / HISTORICAL AUDIT EVIDENCE:
 
 - `docs/audit/*`
 - `docs/e1-validation.md`
+
+## CC-1-C2 bind acknowledgement authority
+
+STATUS: SOURCE COMMITTED / AWAITING VOICE ARTIFACT + DEPLOYMENT
+
+C2 Electron source commit:
+
+- `e5553eb0e302b6c66d5b9aa84ecb9111ef31f905`
+
+Required behavior:
+
+- Electron sends `julia.voice.conversation.bind` with canonical `conversationId`.
+- Electron waits for `julia.voice.conversation.bound` ACK.
+- Electron marks `boundVoiceConversationId` only after ACK `conversationId` exactly equals requested C.
+- Electron does not send copied `messages[]` or `baseLastMessageId` to Voice.
 
 ## Current production code paths
 
