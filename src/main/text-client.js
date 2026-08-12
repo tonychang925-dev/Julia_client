@@ -111,7 +111,7 @@ async function getConversationMessages(conversationId, options = {}) {
       !message
       || !['user', 'assistant'].includes(message.role)
       || typeof message.message_id !== 'string'
-      || typeof message.turn_id !== 'string'
+      || (message.turn_id != null && typeof message.turn_id !== 'string')
       || typeof message.content !== 'string'
     ) return false;
 
