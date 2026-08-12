@@ -63,10 +63,12 @@ let lastBrainStatus = null;
 let lastCacheStatus = null;
 const canonicalSyncInFlight = new Map();
 let boundVoiceConversationId = null;
+let voiceWorkspaceSessionId = null;
 let currentConversationNotice = null;
 
 voiceFrame.addEventListener('load', () => {
   boundVoiceConversationId = null;
+  voiceWorkspaceSessionId = null;
   if (voiceLoaded) setVoiceLifecycleStatus('Voice frame loaded. Bind a Core conversation before microphone capture.', 'unbound');
 });
 
@@ -279,35 +281,48 @@ async function sendVoiceLifecycleCommand(action, timeoutMs = 7000) {
   });
 }
 
-async function bindVoiceConversation(conversationId = activeConversationId) {
-  const targetId = String(conversationId || '').trim();
-  if (!targetId) throw new Error('No active conversation for Voice');
-  if (boundVoiceConversationId === targetId) return { conversationId: targetId, reused: true };
-  await syncCanonicalConversation(targetId, 'voice-bind');
-  setVoiceLifecycleStatus('Binding Voice to Core conversation…', 'bootstrapping');
+async function sendVoiceWorkspaceRequest(type, payload = {}, timeoutMs = 20000) {
   ensureVoiceLoaded();
   await waitForVoiceFrameReady();
   const requestId = createRequestId();
   const message = {
     source: 'julia-electron-v2',
-    type: 'julia.voice.host.attach',
-    protocol: 'julia-electron-v2',
+    type,
     requestId,
-    conversationId: targetId,
+    ...payload,
   };
-  const ack = await new Promise((resolve, reject) => {
+  return new Promise((resolve, reject) => {
     const timeout = setTimeout(() => {
       pendingVoiceCommands.delete(requestId);
-      reject(new Error(`Voice conversation bind timed out: ${targetId}`));
-    }, 30000);
+      reject(new Error(`Voice workspace request timed out: ${type}`));
+    }, timeoutMs);
     pendingVoiceCommands.set(requestId, { resolve, reject, timeout });
     voiceFrame.contentWindow.postMessage(message, getVoiceTargetOrigin());
+  }).then((result) => {
+    if (!result?.ok) throw new Error(result?.error || `Voice workspace request failed: ${type}`);
+    return result;
   });
-  if (!ack?.ok) throw new Error(ack?.error || 'Voice conversation bind failed');
-  if (String(ack.conversationId || '').trim() !== targetId) {
-    throw new Error(`Voice bind acknowledged another conversation: ${ack.conversationId || 'missing'} != ${targetId}`);
+}
+
+async function bindVoiceConversation(conversationId = activeConversationId) {
+  const targetId = String(conversationId || '').trim();
+  if (!targetId) throw new Error('No active conversation for Voice');
+  if (boundVoiceConversationId === targetId && voiceWorkspaceSessionId) return { conversationId: targetId, reused: true };
+  await syncCanonicalConversation(targetId, 'voice-bind');
+  const synced = await textClient.syncConversationMessages(targetId);
+  const canonical = synced.canonical;
+  if (!canonical || canonical.conversation_id !== targetId) {
+    throw new Error('Canonical conversation bootstrap mismatch');
   }
+  setVoiceLifecycleStatus('Loading conversation into Voice…', 'bootstrapping');
+  const result = await sendVoiceWorkspaceRequest('julia.voice.workspace.bootstrap', {
+    conversationId: targetId,
+    baseLastMessageId: canonical.last_message_id || '',
+    messages: canonical.messages || [],
+  }, 30000);
+  if (result.conversationId !== targetId) throw new Error('Voice bootstrap acknowledged another conversation');
   boundVoiceConversationId = targetId;
+  voiceWorkspaceSessionId = result.voiceSessionId;
   setVoiceLifecycleStatus('Voice bound to Core conversation. Microphone is off.', 'idle');
   return { conversationId: targetId, acknowledged: true };
 }
@@ -317,12 +332,34 @@ async function bootstrapVoiceWorkspace(conversationId = activeConversationId) {
 }
 
 async function flushVoiceWorkspace(reason = 'text') {
-  if (!boundVoiceConversationId) return { empty: true };
+  if (!boundVoiceConversationId || !voiceWorkspaceSessionId) return { empty: true };
   const conversationId = boundVoiceConversationId;
-  if (conversationId !== activeConversationId) throw new Error('Voice is bound to another Core conversation');
-  await syncCanonicalConversation(conversationId, `voice-sync:${reason}`);
-  setVoiceLifecycleStatus('Voice is synced with Core conversation. Microphone is off.', 'idle');
-  return { empty: true, canonical: true };
+  if (conversationId !== activeConversationId) throw new Error('Voice workspace is bound to another conversation');
+  setVoiceLifecycleStatus(`Saving Voice conversation for ${reason}…`, 'flushing');
+  const delta = await sendVoiceWorkspaceRequest('julia.voice.workspace.flush', { conversationId }, 30000);
+  if (delta.conversationId !== conversationId || delta.voiceSessionId !== voiceWorkspaceSessionId) {
+    throw new Error('Voice workspace delta identity mismatch');
+  }
+  const turns = Array.isArray(delta.turns) ? delta.turns : [];
+  if (turns.length) {
+    await textClient.commitExternalTurns({
+      conversationId,
+      voiceSessionId: delta.voiceSessionId,
+      baseLastMessageId: delta.baseLastMessageId || '',
+      turns,
+    });
+  }
+  voiceFrame.contentWindow.postMessage({
+    source: 'julia-electron-v2',
+    type: 'julia.voice.workspace.committed',
+    conversationId,
+    voiceSessionId: delta.voiceSessionId,
+    committedTurnIds: turns.map(t => t.turn_id),
+    baseLastMessageId: delta.baseLastMessageId || '',
+  }, getVoiceTargetOrigin());
+  await syncCanonicalConversation(conversationId, `voice-flush:${reason}`);
+  setVoiceLifecycleStatus('Voice conversation saved. Microphone is off.', 'idle');
+  return { empty: turns.length === 0 };
 }
 
 function isPauseConfirmed(result) {
@@ -915,6 +952,7 @@ async function openConversation(conversationId) {
     await pauseVoiceCapture('switch-conversation');
     await flushVoiceWorkspace('switch-conversation');
     boundVoiceConversationId = null;
+    voiceWorkspaceSessionId = null;
   }
   const conversation = await textClient.openConversation(conversationId);
   activeConversationId = conversation.conversation_id;
@@ -935,6 +973,7 @@ async function createNewConversation() {
     await pauseVoiceCapture('new-conversation');
     await flushVoiceWorkspace('new-conversation');
     boundVoiceConversationId = null;
+    voiceWorkspaceSessionId = null;
   }
   const conversation = await textClient.createConversation('New Conversation');
   activeConversationId = conversation.conversation_id;
@@ -1026,6 +1065,7 @@ function buildDiagnosticsText() {
     voice: {
       state: voiceLifecycleState,
       boundConversationId: boundVoiceConversationId,
+      workspaceSessionId: voiceWorkspaceSessionId,
     },
     generated_at: new Date().toISOString(),
   }, null, 2);
