@@ -66,6 +66,15 @@ let boundVoiceConversationId = null;
 let voiceWorkspaceSessionId = null;
 let currentConversationNotice = null;
 
+// CC-2 Layer 1: Realtime UX cache — voice turns show in Text immediately (RAM only, no persistence)
+const voiceSessionCache = { messages: [], _cid: null };
+function voiceSessionCacheReset(cid) { voiceSessionCache.messages = []; voiceSessionCache._cid = cid; }
+function voiceSessionCacheAppend(msg) {
+  if (!voiceSessionCache._cid) return;
+  if (voiceSessionCache.messages.some(m => m.id === msg.id)) return;
+  voiceSessionCache.messages.push(msg);
+}
+
 voiceFrame.addEventListener('load', () => {
   boundVoiceConversationId = null;
   voiceWorkspaceSessionId = null;
@@ -190,6 +199,10 @@ window.addEventListener('message', (event) => {
   if (event.origin !== getVoiceTargetOrigin()) return;
   const payload = event.data;
   if (!isVoiceLifecycleMessage(payload)) return;
+
+  if (payload.type === 'julia.voice.live-message' && !payload.partial && payload.turnId && payload.content?.trim()) {
+    voiceSessionCacheAppend({ id: payload.turnId, role: payload.role, content: payload.content, timestamp: Date.now() });
+  }
 
   if (
     !payload.partial
@@ -396,6 +409,7 @@ async function pauseVoiceCapture(reason = 'text') {
 async function resumeVoiceCapture() {
   ensureVoiceLoaded();
   await ensureActiveConversation();
+  voiceSessionCacheReset(activeConversationId);
   await bootstrapVoiceWorkspace(activeConversationId);
   showSurface('voice');
   setVoiceLifecycleStatus('Starting microphone…', 'resuming');
@@ -783,7 +797,9 @@ function renderConversationMessages(conversation) {
     return;
   }
 
+  const renderedIds = new Set();
   for (const message of messages) {
+    if (message.turn_id) renderedIds.add(message.turn_id);
     appendMessage(message.role, message.content, {
       conversationId: message.conversation_id || conversation?.conversation_id,
       turnId: message.turn_id,
@@ -792,6 +808,20 @@ function renderConversationMessages(conversation) {
       projectionState: message.metadata?.projection_state,
       source: message.metadata?.source,
       metadata: message.metadata,
+    });
+  }
+  // Layer 1: inject voice cache messages (RAM only, dedup by turn_id, timestamp sorted)
+  const pending = voiceSessionCache.messages
+    .filter(cm => cm.id && !renderedIds.has(cm.id))
+    .sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
+  for (const cm of pending) {
+    renderedIds.add(cm.id);
+    appendMessage(cm.role, cm.content, {
+      conversationId: voiceSessionCache._cid,
+      turnId: cm.id,
+      modality: 'voice',
+      status: 'completed',
+      metadata: { source: 'voice-cache' },
     });
   }
 }
