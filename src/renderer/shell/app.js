@@ -70,7 +70,14 @@ let currentConversationNotice = null;
 const voiceSessionCache = { messages: [], reset(cid) { this.messages = []; this._cid = cid; }, append(m) { if (!this.messages.some(x => x.id === m.id)) this.messages.push(m); } };
 function appendVoiceMessage(payload) {
   if (!voiceSessionCache._cid) return;
-  voiceSessionCache.append({ id: payload.turnId || `v_${Date.now()}`, role: payload.role, content: payload.content, modality: 'voice', timestamp: Date.now() });
+  voiceSessionCache.append({
+    id: payload.turnId || (window.crypto?.randomUUID ? window.crypto.randomUUID() : `v_${Date.now()}_${Math.random().toString(36).slice(2,8)}`),
+    conversationId: voiceSessionCache._cid,
+    role: payload.role,
+    content: payload.content,
+    modality: 'voice',
+    timestamp: Date.now()
+  });
 }
 
 voiceFrame.addEventListener('load', () => {
@@ -808,12 +815,12 @@ function renderConversationMessages(conversation) {
       metadata: message.metadata,
     });
   }
-  // CC-2 Phase 1: inject voice cache messages not yet in CRT
-  for (const cm of voiceSessionCache.messages) {
-    if (renderedIds.has(cm.id)) continue;
+  // CC-2 Phase 1: inject voice cache messages not yet in CRT, sorted by timestamp
+  const pending = voiceSessionCache.messages.filter(cm => !renderedIds.has(cm.id));
+  for (const cm of pending.sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0))) {
     renderedIds.add(cm.id);
     appendMessage(cm.role, cm.content, {
-      conversationId: cm._cid || voiceSessionCache._cid,
+      conversationId: cm.conversationId || voiceSessionCache._cid,
       turnId: cm.id,
       modality: 'voice',
       status: 'completed',
