@@ -190,6 +190,7 @@ async function commitVoiceLiveMessage(payload) {
       content,
     }],
   });
+  console.log('[V2_VOICE_COMMIT_OK]', { turnId, role, conversationId });
 
   if (conversationId === activeConversationId) {
     await textClient.addConversationMessage(conversationId, {
@@ -236,6 +237,7 @@ window.addEventListener('message', (event) => {
   }
 
   if (payload.type === 'julia.voice.live-message' && !payload.partial && payload.turnId && payload.content?.trim()) {
+    console.log('[V2_VOICE_LIVE_MSG]', { turnId: payload.turnId, role: payload.role, conversationId: payload.conversationId, contentLen: payload.content.length });
     commitVoiceLiveMessage(payload).catch((error) => {
       console.warn('[V2_VOICE_LIVE_MESSAGE_COMMIT_FAILED]', { turnId: payload.turnId, role: payload.role, error: error.message });
     });
@@ -462,6 +464,11 @@ async function switchToTextMode(reason = 'text') {
   }
   await syncCanonicalConversation(activeConversationId, `switch-to-text:${reason}`).catch((error) => {
     console.warn('[V2_CANONICAL_SYNC_FAILED]', { reason, error: error.message });
+  });
+  // Delayed re-sync: catch voice turns committed by Brain after flush
+  setTimeout(() => {
+    syncCanonicalConversation(activeConversationId, 'switch-to-text:delayed').catch(() => {});
+  }, 2000);
   });
 }
 
