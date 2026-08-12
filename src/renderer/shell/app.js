@@ -171,6 +171,42 @@ function getVoiceTargetOrigin() {
   return new URL(webVoiceUrl).origin;
 }
 
+async function commitVoiceLiveMessage(payload) {
+  const conversationId = String(payload.conversationId || activeConversationId || '').trim();
+  if (!conversationId) return;
+  const turnId = String(payload.turnId || '').trim();
+  const role = String(payload.role || '').trim();
+  const content = String(payload.content || '').trim();
+  if (!turnId || !role || !content) return;
+
+  await textClient.commitExternalTurns({
+    conversationId,
+    voiceSessionId: payload.voiceSessionId || '',
+    baseLastMessageId: '',
+    turns: [{
+      turn_id: turnId,
+      role,
+      modality: 'voice',
+      content,
+    }],
+  });
+
+  if (conversationId === activeConversationId) {
+    await textClient.addConversationMessage(conversationId, {
+      turn_id: turnId,
+      role,
+      modality: 'voice',
+      content,
+      status: 'completed',
+      metadata: {
+        source: 'julia-electron-voice',
+        projection_state: 'voice_committed',
+      },
+    });
+    scheduleCanonicalConversationSync(conversationId, 'voice-turn');
+  }
+}
+
 function resolveVoiceCommand(requestId, payload) {
   const pending = pendingVoiceCommands.get(requestId);
   if (!pending) return;
@@ -197,6 +233,12 @@ window.addEventListener('message', (event) => {
   ) {
     scheduleCanonicalConversationSync(payload.conversationId || activeConversationId, 'voice-turn');
     return;
+  }
+
+  if (payload.type === 'julia.voice.live-message' && !payload.partial && payload.turnId && payload.content?.trim()) {
+    commitVoiceLiveMessage(payload).catch((error) => {
+      console.warn('[V2_VOICE_LIVE_MESSAGE_COMMIT_FAILED]', { turnId: payload.turnId, role: payload.role, error: error.message });
+    });
   }
 
   if (payload.requestId) {
