@@ -66,6 +66,13 @@ let boundVoiceConversationId = null;
 let voiceWorkspaceSessionId = null;
 let currentConversationNotice = null;
 
+// CC-2 Phase 1: minimal voice cache for instant Text display
+const voiceSessionCache = { messages: [], reset(cid) { this.messages = []; this._cid = cid; }, append(m) { if (!this.messages.some(x => x.id === m.id)) this.messages.push(m); } };
+function appendVoiceMessage(payload) {
+  if (!voiceSessionCache._cid) return;
+  voiceSessionCache.append({ id: payload.turnId || `v_${Date.now()}`, role: payload.role, content: payload.content, modality: 'voice', timestamp: Date.now() });
+}
+
 voiceFrame.addEventListener('load', () => {
   boundVoiceConversationId = null;
   voiceWorkspaceSessionId = null;
@@ -190,6 +197,10 @@ window.addEventListener('message', (event) => {
   if (event.origin !== getVoiceTargetOrigin()) return;
   const payload = event.data;
   if (!isVoiceLifecycleMessage(payload)) return;
+
+  if (payload.type === 'julia.voice.live-message' && !payload.partial && payload.turnId && payload.content?.trim()) {
+    appendVoiceMessage(payload);
+  }
 
   if (
     !payload.partial
@@ -396,6 +407,7 @@ async function pauseVoiceCapture(reason = 'text') {
 async function resumeVoiceCapture() {
   ensureVoiceLoaded();
   await ensureActiveConversation();
+  voiceSessionCache.reset(activeConversationId);
   await bootstrapVoiceWorkspace(activeConversationId);
   showSurface('voice');
   setVoiceLifecycleStatus('Starting microphone…', 'resuming');
@@ -783,7 +795,9 @@ function renderConversationMessages(conversation) {
     return;
   }
 
+  const renderedIds = new Set();
   for (const message of messages) {
+    if (message.turn_id) renderedIds.add(message.turn_id);
     appendMessage(message.role, message.content, {
       conversationId: message.conversation_id || conversation?.conversation_id,
       turnId: message.turn_id,
@@ -792,6 +806,18 @@ function renderConversationMessages(conversation) {
       projectionState: message.metadata?.projection_state,
       source: message.metadata?.source,
       metadata: message.metadata,
+    });
+  }
+  // CC-2 Phase 1: inject voice cache messages not yet in CRT
+  for (const cm of voiceSessionCache.messages) {
+    if (renderedIds.has(cm.id)) continue;
+    renderedIds.add(cm.id);
+    appendMessage(cm.role, cm.content, {
+      conversationId: cm._cid || voiceSessionCache._cid,
+      turnId: cm.id,
+      modality: 'voice',
+      status: 'completed',
+      metadata: { source: 'voice-cache' },
     });
   }
 }
