@@ -66,6 +66,45 @@ let boundVoiceConversationId = null;
 let voiceWorkspaceSessionId = null;
 let currentConversationNotice = null;
 
+// CC-2 Phase 1: VoiceSessionCache — realtime display, no CRT dependency
+const voiceSessionCache = {
+  conversationId: null,
+  messages: [],
+  startedAt: 0,
+  reset(conversationId) {
+    this.conversationId = conversationId;
+    this.messages = [];
+    this.startedAt = Date.now();
+  },
+  append(msg) {
+    // Deduplicate by local id
+    if (this.messages.some(m => m.id === msg.id)) return;
+    this.messages.push(msg);
+  },
+  release() {
+    this.conversationId = null;
+    this.messages = [];
+    this.startedAt = 0;
+  }
+};
+
+function appendVoiceMessage(msg) {
+  if (!voiceSessionCache.conversationId) return;
+  voiceSessionCache.append({
+    id: msg.turnId || `voice_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+    conversationId: voiceSessionCache.conversationId,
+    role: msg.role,
+    content: msg.content,
+    modality: 'voice',
+    timestamp: Date.now(),
+    status: msg.status || 'completed',
+  });
+  // Refresh text display if visible
+  if (currentMode === 'text') {
+    syncCanonicalConversation(voiceSessionCache.conversationId, 'voice-cache-update').catch(() => {});
+  }
+}
+
 voiceFrame.addEventListener('load', () => {
   boundVoiceConversationId = null;
   voiceWorkspaceSessionId = null;
@@ -237,7 +276,7 @@ window.addEventListener('message', (event) => {
   }
 
   if (payload.type === 'julia.voice.live-message' && !payload.partial && payload.turnId && payload.content?.trim()) {
-    console.log('[V2_VOICE_LIVE_MSG]', { turnId: payload.turnId, role: payload.role, conversationId: payload.conversationId, contentLen: payload.content.length });
+    appendVoiceMessage(payload);
     commitVoiceLiveMessage(payload).catch((error) => {
       console.warn('[V2_VOICE_LIVE_MESSAGE_COMMIT_FAILED]', { turnId: payload.turnId, role: payload.role, error: error.message });
     });
@@ -449,6 +488,10 @@ async function resumeVoiceCapture() {
 }
 
 async function switchToTextMode(reason = 'text') {
+  // CC-2: capture voice cache BEFORE flush clears it
+  const cachedVoiceMessages = voiceSessionCache.messages.length > 0
+    ? [...voiceSessionCache.messages]
+    : [];
   try {
     await pauseVoiceCapture(reason);
     await flushVoiceWorkspace(reason);
@@ -475,8 +518,10 @@ async function switchToTextMode(reason = 'text') {
 async function switchToVoiceMode({ resume = true } = {}) {
   ensureVoiceLoaded();
   showSurface('voice');
+  // CC-2: initialize voice cache for this conversation
+  await ensureActiveConversation();
+  voiceSessionCache.reset(activeConversationId);
   try {
-    await ensureActiveConversation();
     await bootstrapVoiceWorkspace(activeConversationId);
   } catch (error) {
     setVoiceLifecycleStatus(`Voice mode unavailable: ${error.message}`, 'error');
@@ -832,7 +877,9 @@ function renderConversationMessages(conversation) {
     return;
   }
 
+  const renderedIds = new Set();
   for (const message of messages) {
+    renderedIds.add(message.turn_id);
     appendMessage(message.role, message.content, {
       conversationId: message.conversation_id || conversation?.conversation_id,
       turnId: message.turn_id,
@@ -842,6 +889,25 @@ function renderConversationMessages(conversation) {
       source: message.metadata?.source,
       metadata: message.metadata,
     });
+  }
+  // CC-2 Phase 1: append voice cache messages not yet in CRT
+  const cacheMessages = voiceSessionCache.messages || [];
+  for (const cm of cacheMessages) {
+    if (renderedIds.has(cm.id)) continue;
+    appendMessage(cm.role, cm.content, {
+      conversationId: cm.conversationId,
+      turnId: cm.id,
+      modality: 'voice',
+      status: cm.status || 'completed',
+      metadata: { source: 'voice-cache', projection_state: 'voice_cache' },
+    });
+  }
+  // Show cache indicator if voice messages are pending CRT sync
+  if (cacheMessages.length > 0 && currentMode === 'voice') {
+    const indicator = document.createElement('div');
+    indicator.className = 'cache-banner';
+    indicator.textContent = `Voice session active — ${cacheMessages.length} turn${cacheMessages.length === 1 ? '' : 's'} cached. Switch to Text to sync.`;
+    thread.appendChild(indicator);
   }
 }
 
