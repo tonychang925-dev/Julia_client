@@ -290,7 +290,8 @@ async function bindVoiceConversation(conversationId = activeConversationId) {
   const requestId = createRequestId();
   const message = {
     source: 'julia-electron-v2',
-    type: 'julia.voice.conversation.bind',
+    type: 'julia.voice.host.attach',
+    protocol: 'julia-electron-v2',
     requestId,
     conversationId: targetId,
   };
