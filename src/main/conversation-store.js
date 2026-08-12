@@ -407,7 +407,7 @@ class ConversationStore {
         || !acceptedStatus
         || !['user', 'assistant'].includes(message.role)
         || !String(message.message_id || '').trim()
-        || !String(message.turn_id || '').trim()
+        || (message.turn_id && !String(message.turn_id || '').trim())
         || !String(message.content || '').trim()
       ) continue;
 
