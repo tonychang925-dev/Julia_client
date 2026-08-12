@@ -409,7 +409,7 @@ async function pauseVoiceCapture(reason = 'text') {
 async function resumeVoiceCapture() {
   ensureVoiceLoaded();
   await ensureActiveConversation();
-  voiceSessionCacheReset(activeConversationId);
+  if (voiceSessionCache._cid !== activeConversationId) voiceSessionCacheReset(activeConversationId);
   await bootstrapVoiceWorkspace(activeConversationId);
   showSurface('voice');
   setVoiceLifecycleStatus('Starting microphone…', 'resuming');
@@ -442,6 +442,7 @@ async function switchToVoiceMode({ resume = true } = {}) {
   showSurface('voice');
   try {
     await ensureActiveConversation();
+    if (resume) voiceSessionCacheReset(activeConversationId);
     await bootstrapVoiceWorkspace(activeConversationId);
   } catch (error) {
     setVoiceLifecycleStatus(`Voice mode unavailable: ${error.message}`, 'error');
