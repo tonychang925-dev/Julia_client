@@ -71,7 +71,7 @@ const voiceSessionCache = { messages: [], _cid: null };
 function voiceSessionCacheReset(cid) { voiceSessionCache.messages = []; voiceSessionCache._cid = cid; }
 function voiceSessionCacheAppend(msg) {
   if (!voiceSessionCache._cid) return;
-  if (voiceSessionCache.messages.some(m => m.id === msg.id)) return;
+  if (voiceSessionCache.messages.some(m => m.id === msg.id && m.role === msg.role)) return;
   voiceSessionCache.messages.push(msg);
 }
 
