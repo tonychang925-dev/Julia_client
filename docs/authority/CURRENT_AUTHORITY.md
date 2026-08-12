@@ -1,13 +1,13 @@
 # Julia Electron Current Authority
 
 STATUS: CANONICAL
-UPDATED: 2026-08-11
+UPDATED: 2026-08-13
 REPOSITORY: Julia_client
 LOCAL PATH: /Users/admin/julia_electron_v2
-ROLE: Electron desktop client for Julia Voice/Text interaction
+ROLE: Electron desktop client / presentation projection for Julia Voice/Text
 AUTHORITATIVE BRANCH: codex/bugfix/electron-c10-c11-projection
-AUTHORITATIVE CODE COMMIT AT CC-1 SOURCE CLOSEOUT: 56cac30f3f467d28f9eacca0e4a4b6167038c9d4
-AUTHORITATIVE DOC HEAD: 381484ea03746456e7e5eed6adb4946e9d300cca plus C2 metadata successor
+AUTHORITATIVE CODE COMMIT: 4a08967
+SUPERSEDED CC-1 SOURCE CLOSEOUT: 56cac30f3f467d28f9eacca0e4a4b6167038c9d4 (historical)
 
 ## Repository identity
 
