@@ -12,6 +12,8 @@ const backToTextButton = document.getElementById('backToTextButton');
 const voiceUrlLabel = document.getElementById('voiceUrlLabel');
 const voiceFrame = document.getElementById('voiceFrame');
 const voiceLifecycleStatus = document.getElementById('voiceLifecycleStatus');
+const voicePhasePill = document.getElementById('voicePhasePill');
+const voiceStateHint = document.getElementById('voiceStateHint');
 const resumeVoiceButton = document.getElementById('resumeVoiceButton');
 const pauseVoiceButton = document.getElementById('pauseVoiceButton');
 const thread = document.getElementById('conversationThread');
@@ -36,6 +38,10 @@ const launchAtLoginSetting = document.getElementById('launchAtLoginSetting');
 const brainEndpointSetting = document.getElementById('brainEndpointSetting');
 const brainStatusDetails = document.getElementById('brainStatusDetails');
 const refreshBrainStatusButton = document.getElementById('refreshBrainStatusButton');
+const copyDiagnosticsButton = document.getElementById('copyDiagnosticsButton');
+const cacheStatusDetails = document.getElementById('cacheStatusDetails');
+const reloadFromCoreButton = document.getElementById('reloadFromCoreButton');
+const clearLocalCacheButton = document.getElementById('clearLocalCacheButton');
 const globalShortcutSetting = document.getElementById('globalShortcutSetting');
 const windowRestoreSetting = document.getElementById('windowRestoreSetting');
 const trayEnabledSetting = document.getElementById('trayEnabledSetting');
@@ -52,6 +58,28 @@ let voiceLoadPromise = null;
 let voiceLifecycleState = 'paused';
 const activeTextStreams = new Map();
 const pendingVoiceCommands = new Map();
+let canonicalSyncTimer = null;
+let lastBrainStatus = null;
+let lastCacheStatus = null;
+const canonicalSyncInFlight = new Map();
+let boundVoiceConversationId = null;
+let voiceWorkspaceSessionId = null;
+let currentConversationNotice = null;
+
+// CC-2 Layer 1: Realtime UX cache — voice turns show in Text immediately (RAM only, no persistence)
+const voiceSessionCache = { messages: [], _cid: null };
+function voiceSessionCacheReset(cid) { voiceSessionCache.messages = []; voiceSessionCache._cid = cid; }
+function voiceSessionCacheAppend(msg) {
+  if (!voiceSessionCache._cid) return;
+  if (voiceSessionCache.messages.some(m => m.id === msg.id && m.role === msg.role)) return;
+  voiceSessionCache.messages.push(msg);
+}
+
+voiceFrame.addEventListener('load', () => {
+  boundVoiceConversationId = null;
+  voiceWorkspaceSessionId = null;
+  if (voiceLoaded) setVoiceLifecycleStatus('Voice frame loaded. Bind a Core conversation before microphone capture.', 'unbound');
+});
 
 voiceUrlLabel.textContent = webVoiceUrl;
 
@@ -65,10 +93,61 @@ function showSurface(mode) {
   voiceModeButton.classList.toggle('active', isVoice);
 }
 
+function getVoiceUx() {
+  return window.JuliaVoiceUX || {
+    describeVoiceState: (state, payload = {}) => ({
+      state: String(state || 'idle'),
+      label: String(state || 'Voice'),
+      detail: payload.message || '',
+      active: ['active', 'listening'].includes(String(state || '').toLowerCase()),
+      busy: false,
+    }),
+    getVoiceControlState: () => ({ startDisabled: false, releaseDisabled: false, textSwitchDiscouraged: false }),
+    isVoiceWorkspaceNotSettled: (error) => /not settled/i.test(String(error?.message || error || '')),
+  };
+}
+
+function updateVoiceControls() {
+  const controls = getVoiceUx().getVoiceControlState(voiceLifecycleState);
+  resumeVoiceButton.disabled = Boolean(controls.startDisabled);
+  pauseVoiceButton.disabled = Boolean(controls.releaseDisabled);
+  backToTextButton.classList.toggle('discouraged', Boolean(controls.textSwitchDiscouraged));
+  textModeButton.classList.toggle('discouraged', Boolean(controls.textSwitchDiscouraged));
+}
+
 function setVoiceLifecycleStatus(message, state = voiceLifecycleState) {
-  voiceLifecycleState = state;
-  voiceLifecycleStatus.textContent = message;
-  voiceSurface.dataset.voiceState = state;
+  const display = getVoiceUx().describeVoiceState(state, { message });
+  voiceLifecycleState = display.state;
+  voiceLifecycleStatus.textContent = message || display.detail;
+  voiceSurface.dataset.voiceState = display.state;
+  if (voicePhasePill) voicePhasePill.textContent = display.label;
+  if (voiceStateHint) voiceStateHint.textContent = display.detail;
+  updateVoiceControls();
+}
+
+function isVoiceCapturePotentiallyActive() {
+  return ['active', 'listening', 'speech', 'processing', 'speaking', 'resuming', 'pausing', 'draining'].includes(String(voiceLifecycleState).toLowerCase());
+}
+
+function applyVoiceRuntimeEvent(payload) {
+  const type = String(payload?.type || payload?.event || '').toLowerCase();
+  const status = payload?.status || payload?.state;
+  if (payload?.partial || type.includes('transcript.partial') || type.includes('speech')) {
+    setVoiceLifecycleStatus('Speech detected. Voice is attached to the Core conversation.', 'speech');
+    return;
+  }
+  if (type.includes('response') && (type.includes('done') || type.includes('finished'))) {
+    setVoiceLifecycleStatus('Julia response generated. Waiting for Voice audio to settle…', 'draining');
+    return;
+  }
+  if (type.includes('audio') || type.includes('playback') || type.includes('tts')) {
+    setVoiceLifecycleStatus('Julia is speaking.', 'speaking');
+    return;
+  }
+  if (status) {
+    const display = getVoiceUx().describeVoiceState(status, payload);
+    setVoiceLifecycleStatus(payload.message || `Voice lifecycle: ${display.label}`, display.state);
+  }
 }
 
 function ensureVoiceLoaded() {
@@ -81,7 +160,9 @@ function ensureVoiceLoaded() {
     };
     voiceFrame.addEventListener('load', onLoad);
   });
-  voiceFrame.src = webVoiceUrl;
+  const url = new URL(webVoiceUrl);
+  url.searchParams.set('juliaElectronHost', String(Date.now()));
+  voiceFrame.src = url.toString();
   voiceLoaded = true;
 }
 
@@ -92,6 +173,7 @@ async function waitForVoiceFrameReady() {
     voiceLoadPromise,
     new Promise((resolve) => setTimeout(resolve, 3000)),
   ]);
+  if (!voiceFrameReady) throw new Error('Voice frame did not become ready');
 }
 
 function getVoiceTargetOrigin() {
@@ -118,15 +200,77 @@ window.addEventListener('message', (event) => {
   const payload = event.data;
   if (!isVoiceLifecycleMessage(payload)) return;
 
+  if (payload.type === 'julia.voice.live-message' && !payload.partial && payload.turnId && payload.content?.trim()) {
+    voiceSessionCacheAppend({ id: payload.turnId, role: payload.role, content: payload.content, timestamp: Date.now() });
+  }
+
+  if (
+    !payload.partial
+    && (payload.type === 'julia.voice.transcript' || payload.type === 'voice:transcript')
+  ) {
+    scheduleCanonicalConversationSync(payload.conversationId || activeConversationId, 'voice-turn');
+    return;
+  }
+
   if (payload.requestId) {
     resolveVoiceCommand(payload.requestId, payload);
   }
 
-  if (payload.status || payload.state) {
-    const state = payload.status || payload.state;
-    setVoiceLifecycleStatus(`Voice lifecycle: ${state}`, String(state).toLowerCase());
-  }
+  applyVoiceRuntimeEvent(payload);
 });
+
+async function syncCanonicalConversation(conversationId = activeConversationId, reason = 'manual') {
+  const targetId = String(conversationId || '').trim();
+  if (!targetId) return null;
+  if (targetId !== activeConversationId) {
+    console.warn('[V2_CANONICAL_SYNC_SKIPPED_MISMATCH]', { targetId, activeConversationId, reason });
+    return null;
+  }
+  if (canonicalSyncInFlight.has(targetId)) return canonicalSyncInFlight.get(targetId);
+
+  if (reason !== 'voice-turn') {
+    setConversationNotice('Reconnecting — waiting for Core truth…', 'syncing');
+  }
+
+  const syncPromise = textClient.syncConversationMessages(targetId)
+    .then(async (result) => {
+      const reconciliation = result.reconciliation || {};
+      const changed = (reconciliation.inserted || 0) + (reconciliation.updated || 0) + (reconciliation.removed_local || 0);
+      setConversationNotice(
+        changed
+          ? `Back online — synced with Core (${changed} projection update${changed === 1 ? '' : 's'}).`
+          : 'Back online — conversation is synced with Core.',
+        'synced'
+      );
+      if (activeConversationId === targetId) {
+        renderConversationMessages(result.conversation);
+        await refreshConversationList();
+      }
+      console.info('[V2_CANONICAL_SYNC]', { reason, conversationId: targetId, ...result.reconciliation });
+      return result;
+    })
+    .catch((error) => {
+      setConversationNotice(`Offline — showing last synced conversation. ${error.message}`, 'offline');
+      throw error;
+    })
+    .finally(() => {
+      canonicalSyncInFlight.delete(targetId);
+    });
+  canonicalSyncInFlight.set(targetId, syncPromise);
+  return syncPromise;
+}
+
+function scheduleCanonicalConversationSync(conversationId, reason) {
+  const targetId = String(conversationId || '').trim();
+  if (!targetId || targetId !== activeConversationId) return;
+  clearTimeout(canonicalSyncTimer);
+  canonicalSyncTimer = setTimeout(() => {
+    syncCanonicalConversation(targetId, reason).catch((error) => {
+      setConversationNotice(`Offline — showing last synced conversation. ${error.message}`, 'offline');
+      console.warn('[V2_CANONICAL_SYNC_FAILED]', { reason, conversationId: targetId, error: error.message });
+    });
+  }, 350);
+}
 
 async function sendVoiceLifecycleCommand(action, timeoutMs = 7000) {
   ensureVoiceLoaded();
@@ -150,15 +294,107 @@ async function sendVoiceLifecycleCommand(action, timeoutMs = 7000) {
   });
 }
 
+async function sendVoiceWorkspaceRequest(type, payload = {}, timeoutMs = 20000) {
+  ensureVoiceLoaded();
+  await waitForVoiceFrameReady();
+  const requestId = createRequestId();
+  const message = {
+    source: 'julia-electron-v2',
+    type,
+    requestId,
+    ...payload,
+  };
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      pendingVoiceCommands.delete(requestId);
+      reject(new Error(`Voice workspace request timed out: ${type}`));
+    }, timeoutMs);
+    pendingVoiceCommands.set(requestId, { resolve, reject, timeout });
+    voiceFrame.contentWindow.postMessage(message, getVoiceTargetOrigin());
+  }).then((result) => {
+    if (!result?.ok) throw new Error(result?.error || `Voice workspace request failed: ${type}`);
+    return result;
+  });
+}
+
+async function bindVoiceConversation(conversationId = activeConversationId) {
+  const targetId = String(conversationId || '').trim();
+  if (!targetId) throw new Error('No active conversation for Voice');
+  if (boundVoiceConversationId === targetId && voiceWorkspaceSessionId) return { conversationId: targetId, reused: true };
+  await syncCanonicalConversation(targetId, 'voice-bind');
+  const synced = await textClient.syncConversationMessages(targetId);
+  const canonical = synced.canonical;
+  if (!canonical || canonical.conversation_id !== targetId) {
+    throw new Error('Canonical conversation bootstrap mismatch');
+  }
+  setVoiceLifecycleStatus('Loading conversation into Voice…', 'bootstrapping');
+  const result = await sendVoiceWorkspaceRequest('julia.voice.workspace.bootstrap', {
+    conversationId: targetId,
+    baseLastMessageId: canonical.last_message_id || '',
+    messages: canonical.messages || [],
+  }, 30000);
+  if (result.conversationId !== targetId) throw new Error('Voice bootstrap acknowledged another conversation');
+  boundVoiceConversationId = targetId;
+  voiceWorkspaceSessionId = result.voiceSessionId;
+  setVoiceLifecycleStatus('Voice bound to Core conversation. Microphone is off.', 'idle');
+  return { conversationId: targetId, acknowledged: true };
+}
+
+async function bootstrapVoiceWorkspace(conversationId = activeConversationId) {
+  return bindVoiceConversation(conversationId);
+}
+
+async function flushVoiceWorkspace(reason = 'text') {
+  if (!boundVoiceConversationId || !voiceWorkspaceSessionId) return { empty: true };
+  const conversationId = boundVoiceConversationId;
+  if (conversationId !== activeConversationId) throw new Error('Voice workspace is bound to another conversation');
+  setVoiceLifecycleStatus(`Saving Voice conversation for ${reason}…`, 'flushing');
+  const delta = await sendVoiceWorkspaceRequest('julia.voice.workspace.flush', { conversationId }, 30000);
+  if (delta.conversationId !== conversationId || delta.voiceSessionId !== voiceWorkspaceSessionId) {
+    throw new Error('Voice workspace delta identity mismatch');
+  }
+  const turns = Array.isArray(delta.turns) ? delta.turns : [];
+  if (turns.length) {
+    await textClient.commitExternalTurns({
+      conversationId,
+      voiceSessionId: delta.voiceSessionId,
+      baseLastMessageId: delta.baseLastMessageId || '',
+      turns,
+    });
+  }
+  voiceFrame.contentWindow.postMessage({
+    source: 'julia-electron-v2',
+    type: 'julia.voice.workspace.committed',
+    conversationId,
+    voiceSessionId: delta.voiceSessionId,
+    committedTurnIds: turns.map(t => t.turn_id),
+    baseLastMessageId: delta.baseLastMessageId || '',
+  }, getVoiceTargetOrigin());
+  await syncCanonicalConversation(conversationId, `voice-flush:${reason}`);
+  setVoiceLifecycleStatus('Voice conversation saved. Microphone is off.', 'idle');
+  return { empty: turns.length === 0 };
+}
+
 function isPauseConfirmed(result) {
   const status = String(result?.status || result?.state || '').toLowerCase();
-  return result?.ok === true || result?.micCapturePaused === true || ['paused', 'released'].includes(status);
+  return (
+    result?.ok === true
+    || result?.micCapturePaused === true
+    || result?.details?.paused === true
+    || result?.details?.client?.hasMicSource === false
+    || ['paused', 'released'].includes(status)
+  );
 }
 
 async function pauseVoiceCapture(reason = 'text') {
   if (!voiceLoaded) {
-    setVoiceLifecycleStatus('Voice surface ready. Microphone is off.', 'paused');
+    setVoiceLifecycleStatus('Voice surface ready. Microphone is off.', 'idle');
     return { ok: true, skipped: true };
+  }
+
+  if (!isVoiceCapturePotentiallyActive()) {
+    setVoiceLifecycleStatus('Voice surface ready. Microphone is off.', 'idle');
+    return { ok: true, skipped: true, state: voiceLifecycleState };
   }
 
   setVoiceLifecycleStatus('Releasing microphone…', 'pausing');
@@ -172,6 +408,9 @@ async function pauseVoiceCapture(reason = 'text') {
 
 async function resumeVoiceCapture() {
   ensureVoiceLoaded();
+  await ensureActiveConversation();
+  if (voiceSessionCache._cid !== activeConversationId) voiceSessionCacheReset(activeConversationId);
+  await bootstrapVoiceWorkspace(activeConversationId);
   showSurface('voice');
   setVoiceLifecycleStatus('Starting microphone…', 'resuming');
   const result = await sendVoiceLifecycleCommand('resumeMicCapture');
@@ -182,21 +421,36 @@ async function resumeVoiceCapture() {
 async function switchToTextMode(reason = 'text') {
   try {
     await pauseVoiceCapture(reason);
+    await flushVoiceWorkspace(reason);
     showSurface('text');
   } catch (error) {
     showSurface('voice');
-    setVoiceLifecycleStatus(`Microphone release failed: ${error.message}`, 'error');
+    if (getVoiceUx().isVoiceWorkspaceNotSettled(error)) {
+      setVoiceLifecycleStatus('Voice is finishing. Wait for generation/audio to settle, then try Text again.', 'draining');
+    } else {
+      setVoiceLifecycleStatus(`Microphone release failed: ${error.message}`, 'error');
+    }
     throw error;
   }
+  await syncCanonicalConversation(activeConversationId, `switch-to-text:${reason}`).catch((error) => {
+    console.warn('[V2_CANONICAL_SYNC_FAILED]', { reason, error: error.message });
+  });
 }
 
 async function switchToVoiceMode({ resume = true } = {}) {
   ensureVoiceLoaded();
   showSurface('voice');
+  try {
+    await ensureActiveConversation();
+    await bootstrapVoiceWorkspace(activeConversationId);
+  } catch (error) {
+    setVoiceLifecycleStatus(`Voice mode unavailable: ${error.message}`, 'error');
+    throw error;
+  }
   if (resume) {
     await resumeVoiceCapture();
   } else {
-    setVoiceLifecycleStatus('Voice surface ready. Microphone is off.', 'paused');
+    setVoiceLifecycleStatus('Voice surface ready. Microphone is off.', 'idle');
   }
 }
 
@@ -204,6 +458,7 @@ async function prepareAppHidden(reason = 'hidden') {
   if (currentMode !== 'voice') return { ok: true, mode: currentMode };
   try {
     await pauseVoiceCapture(reason);
+    await flushVoiceWorkspace(reason);
     return { ok: true, mode: currentMode, voiceLifecycleState };
   } catch (error) {
     return { ok: false, error: error.message, mode: currentMode, voiceLifecycleState };
@@ -245,6 +500,18 @@ function openSettingsPanel() {
   setSettingsError('');
   settingsPanel.classList.remove('hidden');
   brainEndpointSetting.focus();
+  refreshBrainStatus().catch((error) => {
+    renderBrainStatus({
+      connected: false,
+      endpoint: brainEndpointSetting.value,
+      status: 'offline',
+      error: error.message,
+      checked_at: new Date().toISOString(),
+    });
+  });
+  refreshCacheStatus().catch((error) => {
+    renderCacheStatus({ error: error.message });
+  });
 }
 
 function closeSettingsPanel() {
@@ -253,14 +520,20 @@ function closeSettingsPanel() {
 }
 
 function renderBrainStatus(status) {
+  lastBrainStatus = status;
   brainStatusDot.classList.toggle('offline', !status.connected);
   brainStatusText.textContent = status.connected ? 'Julia Brain' : 'Brain Offline';
 
+  const unavailable = 'unavailable';
   const lines = [
-    `Endpoint: ${status.endpoint}`,
-    `Status: ${status.status}`,
-    status.contract_version ? `Contract: ${status.contract_version}` : null,
-    status.julia_core ? `Julia Core: ${status.julia_core}` : null,
+    `Endpoint: ${status.endpoint || unavailable}`,
+    `Status: ${status.status || unavailable}`,
+    `Contract: ${status.contract_version || unavailable}`,
+    `Julia Core: ${status.julia_core || unavailable}`,
+    `Service version: ${status.service_version || unavailable}`,
+    `Architecture: ${status.architecture_version || unavailable}`,
+    `Build: ${status.build || unavailable}`,
+    `Commit: ${status.commit || unavailable}`,
     status.error ? `Error: ${status.error}` : null,
     status.checked_at ? `Last check: ${new Date(status.checked_at).toLocaleString()}` : null,
   ].filter(Boolean);
@@ -283,6 +556,7 @@ async function restoreSettingsState() {
     showSurface('text');
   }
   await refreshBrainStatus();
+  await refreshCacheStatus();
 }
 
 function escapeHtml(value) {
@@ -362,21 +636,131 @@ function renderMessageContent(content) {
   return fragment;
 }
 
+function getMessagePresentation(role, status, options = {}) {
+  const normalizedStatus = String(status || 'completed');
+  const modality = options.modality === 'voice' ? 'voice' : 'text';
+  const projectionState = String(options.projectionState || '');
+  const isLocalProjection = options.source === 'julia-electron-local' || projectionState.startsWith('local_') || projectionState === 'failed';
+
+  if (normalizedStatus === 'pending') {
+    return {
+      label: role === 'user' ? 'Sending' : 'Waiting for Core',
+      detail: role === 'user' ? 'Core pending' : 'Local projection until Core confirms',
+      className: 'pending',
+      retryable: false,
+    };
+  }
+  if (normalizedStatus === 'failed') {
+    return {
+      label: 'Failed',
+      detail: isLocalProjection ? 'Retryable local projection — not canonical history' : 'Failed',
+      className: 'failed',
+      retryable: role === 'user' && isLocalProjection,
+    };
+  }
+  if (normalizedStatus === 'interrupted') {
+    return {
+      label: 'Interrupted',
+      detail: modality === 'voice'
+        ? 'Core canonical interrupted voice response'
+        : 'Core canonical interrupted response',
+      className: 'interrupted',
+      retryable: false,
+    };
+  }
+  return {
+    label: projectionState === 'core_returned' ? 'Reconciling' : '',
+    detail: projectionState === 'core_returned' ? 'Waiting for canonical Core read-back' : '',
+    className: projectionState === 'core_returned' ? 'reconciling' : 'completed',
+    retryable: false,
+  };
+}
+
+function applyMessagePresentation(message, role, status, options = {}) {
+  const presentation = getMessagePresentation(role, status, options);
+  message.dataset.status = status;
+  message.classList.remove('error', 'failed', 'interrupted', 'pending', 'reconciling');
+  if (presentation.className && presentation.className !== 'completed') {
+    message.classList.add(presentation.className);
+  }
+  if (status === 'failed') message.classList.add('error');
+  if (status === 'pending') message.dataset.pending = 'true';
+  else delete message.dataset.pending;
+
+  const roleEl = message.querySelector('.role');
+  if (roleEl) {
+    const statusLabel = presentation.label ? ` · ${presentation.label}` : '';
+    roleEl.textContent = `${role === 'user' ? 'Tony' : 'Julia'}${options.modality === 'voice' ? ' 🎤' : ''}${statusLabel}`;
+  }
+  const detail = message.querySelector('.message-status-detail');
+  if (detail) {
+    detail.textContent = presentation.detail || '';
+    detail.classList.toggle('hidden', !presentation.detail);
+  }
+  return presentation;
+}
+
 function createMessage(role, content, options = {}) {
   const message = document.createElement('div');
   message.className = `message ${role}`;
-  if (options.pending) message.dataset.pending = 'true';
+  const status = options.status || (options.pending ? 'pending' : 'completed');
+  const projectionState = options.projectionState || options.metadata?.projection_state || '';
+  const source = options.source || options.metadata?.source || '';
+  message.dataset.status = status;
+  message.dataset.role = role;
+  message.dataset.content = String(content || '');
+  if (options.turnId) message.dataset.turnId = options.turnId;
+  if (options.conversationId) message.dataset.conversationId = options.conversationId;
+  if (options.modality) message.dataset.modality = options.modality;
+  if (projectionState) message.dataset.projectionState = projectionState;
+  if (source) message.dataset.source = source;
 
   const roleEl = document.createElement('div');
   roleEl.className = 'role';
-  roleEl.textContent = role === 'user' ? 'Tony' : 'Julia';
 
   const bubble = document.createElement('div');
   bubble.className = 'bubble';
   bubble.appendChild(renderMessageContent(content));
 
-  message.append(roleEl, bubble);
+  const detail = document.createElement('div');
+  detail.className = 'message-status-detail hidden';
+
+  const actions = document.createElement('div');
+  actions.className = 'message-actions hidden';
+
+  message.append(roleEl, bubble, detail, actions);
+  const presentation = applyMessagePresentation(message, role, status, { ...options, projectionState, source });
+
+  if (presentation.retryable) {
+    const retry = document.createElement('button');
+    retry.type = 'button';
+    retry.className = 'message-action-button retry-message-button';
+    retry.dataset.action = 'retry-message';
+    retry.textContent = 'Retry';
+    actions.replaceChildren(retry);
+    actions.classList.remove('hidden');
+  }
+
   return message;
+}
+
+function createConversationNotice(kind, message) {
+  const notice = document.createElement('div');
+  notice.className = `conversation-notice ${kind || 'info'}`;
+  notice.textContent = message;
+  return notice;
+}
+
+function setConversationNotice(message, kind = 'info') {
+  currentConversationNotice = message ? { message, kind } : null;
+  const existing = thread.querySelector('.conversation-notice');
+  if (!message) {
+    existing?.remove();
+    return;
+  }
+  const notice = createConversationNotice(kind, message);
+  if (existing) existing.replaceWith(notice);
+  else thread.prepend(notice);
 }
 
 function createWelcomeMessage() {
@@ -396,14 +780,49 @@ function appendMessage(role, content, options) {
 function renderConversationMessages(conversation) {
   thread.replaceChildren();
 
+  if (currentConversationNotice) {
+    thread.appendChild(createConversationNotice(currentConversationNotice.kind, currentConversationNotice.message));
+  }
+
+  if (conversation?.projection?.stale) {
+    const stale = document.createElement('div');
+    stale.className = 'cache-banner';
+    stale.textContent = `Offline — showing last synced conversation. Last Core sync failed${conversation.projection.last_reconcile_error ? `: ${conversation.projection.last_reconcile_error}` : '.'}`;
+    thread.appendChild(stale);
+  }
+
   const messages = conversation?.messages || [];
   if (messages.length === 0) {
     thread.appendChild(createWelcomeMessage());
     return;
   }
 
+  const renderedIds = new Set();
   for (const message of messages) {
-    appendMessage(message.role, message.content);
+    if (message.turn_id) renderedIds.add(message.turn_id);
+    appendMessage(message.role, message.content, {
+      conversationId: message.conversation_id || conversation?.conversation_id,
+      turnId: message.turn_id,
+      modality: message.modality,
+      status: message.status,
+      projectionState: message.metadata?.projection_state,
+      source: message.metadata?.source,
+      metadata: message.metadata,
+    });
+  }
+  // Layer 1: inject voice cache messages (RAM only, dedup by turn_id, timestamp sorted)
+  const pending = voiceSessionCache.messages
+    .filter(cm => cm.id && !renderedIds.has(cm.id))
+    .sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
+  for (const cm of pending) {
+    renderedIds.add(cm.id);
+    appendMessage(cm.role, cm.content, {
+      conversationId: voiceSessionCache._cid,
+      turnId: cm.id,
+      modality: 'voice',
+      status: 'completed',
+      metadata: { source: 'voice-cache' },
+    });
   }
 }
 
@@ -545,23 +964,52 @@ async function ensureActiveConversation() {
 
   const conversation = await textClient.getCurrentConversation();
   activeConversationId = conversation.conversation_id;
-  renderConversationMessages(conversation);
+  try {
+    const result = await textClient.syncConversationMessages(activeConversationId);
+    renderConversationMessages(result.conversation);
+  } catch (error) {
+    console.warn('[V2_CANONICAL_ENSURE_FAILED]', error.message);
+    setConversationNotice(`Offline — showing last synced conversation. ${error.message}`, 'offline');
+    renderConversationMessages(conversation);
+  }
   await refreshConversationList();
+  await refreshCacheStatus();
   return activeConversationId;
 }
 
 async function openConversation(conversationId) {
+  if (boundVoiceConversationId && boundVoiceConversationId !== conversationId) {
+    await pauseVoiceCapture('switch-conversation');
+    await flushVoiceWorkspace('switch-conversation');
+    boundVoiceConversationId = null;
+    voiceWorkspaceSessionId = null;
+  }
   const conversation = await textClient.openConversation(conversationId);
   activeConversationId = conversation.conversation_id;
-  renderConversationMessages(conversation);
+  try {
+    const result = await textClient.syncConversationMessages(activeConversationId);
+    renderConversationMessages(result.conversation);
+  } catch (error) {
+    console.warn('[V2_CANONICAL_OPEN_FAILED]', error.message);
+    setConversationNotice(`Offline — showing last synced conversation. ${error.message}`, 'offline');
+    renderConversationMessages(conversation);
+  }
   await refreshConversationList();
+  await refreshCacheStatus();
 }
 
 async function createNewConversation() {
+  if (boundVoiceConversationId) {
+    await pauseVoiceCapture('new-conversation');
+    await flushVoiceWorkspace('new-conversation');
+    boundVoiceConversationId = null;
+    voiceWorkspaceSessionId = null;
+  }
   const conversation = await textClient.createConversation('New Conversation');
   activeConversationId = conversation.conversation_id;
   renderConversationMessages(conversation);
   await refreshConversationList();
+  await refreshCacheStatus();
   composerInput.focus();
 }
 
@@ -576,6 +1024,7 @@ async function renameConversation(conversationId, currentTitle) {
     renderConversationMessages(updated);
   }
   await refreshConversationList();
+  await refreshCacheStatus();
 }
 
 async function deleteConversation(conversationId) {
@@ -587,13 +1036,84 @@ async function deleteConversation(conversationId) {
   activeConversationId = next.conversation_id;
   renderConversationMessages(next);
   await refreshConversationList();
+  await refreshCacheStatus();
+}
+
+async function refreshCacheStatus() {
+  if (!textClient.getCacheStatus) return null;
+  const status = await textClient.getCacheStatus();
+  lastCacheStatus = status;
+  renderCacheStatus(status);
+  return status;
+}
+
+function renderCacheStatus(status) {
+  if (!cacheStatusDetails) return;
+  if (!status) {
+    cacheStatusDetails.textContent = 'Local cache status unavailable.';
+    return;
+  }
+  cacheStatusDetails.textContent = [
+    'Authority: disposable projection',
+    `Conversations: ${status.conversation_count ?? 'unavailable'}`,
+    `Messages: ${status.message_count ?? 'unavailable'}`,
+    `Stale conversations: ${status.stale_conversation_count ?? 'unavailable'}`,
+    `Current conversation: ${status.current_conversation_id || 'unavailable'}`,
+    `Last cleared: ${status.last_cleared_at || 'never'}`,
+    `Cache file: ${status.file_path || 'unavailable'}`,
+  ].join('\n');
+}
+
+async function reloadActiveConversationFromCore(reason = 'manual-reload') {
+  const conversationId = await ensureActiveConversation();
+  const result = await syncCanonicalConversation(conversationId, reason);
+  await refreshCacheStatus();
+  return result;
+}
+
+async function clearLocalCacheAndReload() {
+  const conversationId = activeConversationId;
+  if (!conversationId) throw new Error('No active conversation to reload after cache clear');
+  const ok = window.confirm('Clear only the local Electron cache? Julia Core conversation history will not be deleted.');
+  if (!ok) return null;
+  await textClient.clearLocalCache();
+  await refreshCacheStatus();
+  activeConversationId = conversationId;
+  const result = await syncCanonicalConversation(conversationId, 'clear-local-cache');
+  await refreshConversationList();
+  await refreshCacheStatus();
+  return result;
+}
+
+
+function buildDiagnosticsText() {
+  return JSON.stringify({
+    brain: lastBrainStatus || null,
+    cache: lastCacheStatus || null,
+    activeConversationId,
+    mode: currentMode,
+    voice: {
+      state: voiceLifecycleState,
+      boundConversationId: boundVoiceConversationId,
+      workspaceSessionId: voiceWorkspaceSessionId,
+    },
+    generated_at: new Date().toISOString(),
+  }, null, 2);
 }
 
 async function restoreConversationState() {
   const conversation = await textClient.getCurrentConversation();
   activeConversationId = conversation.conversation_id;
-  renderConversationMessages(conversation);
+  try {
+    const result = await textClient.syncConversationMessages(activeConversationId);
+    renderConversationMessages(result.conversation);
+  } catch (error) {
+    console.warn('[V2_CANONICAL_RESTORE_FAILED]', error.message);
+    setConversationNotice(`Offline — showing last synced conversation. ${error.message}`, 'offline');
+    renderConversationMessages(conversation);
+  }
   await refreshConversationList();
+  await refreshCacheStatus();
 }
 
 function setComposerBusy(isBusy) {
@@ -615,6 +1135,14 @@ function setMessageContent(message, content) {
 }
 
 thread.addEventListener('click', async (event) => {
+  const retryButton = event.target.closest('[data-action="retry-message"]');
+  if (retryButton) {
+    retryFailedMessage(retryButton.closest('.message')).catch((error) => {
+      setConversationNotice(`Retry failed: ${error.message}`, 'error');
+    });
+    return;
+  }
+
   const button = event.target.closest('.copy-button');
   if (!button) return;
 
@@ -641,18 +1169,122 @@ textClient.onTextStreamEvent((event) => {
   if (event.type === 'done') {
     stream.content = event.content || stream.content;
     setMessageContent(stream.message, stream.content);
-    delete stream.message.dataset.pending;
+    applyMessagePresentation(stream.message, 'assistant', 'completed', {
+      modality: 'text',
+      source: 'julia-electron-local',
+      projectionState: 'core_returned',
+    });
     activeTextStreams.delete(event.requestId);
     return;
   }
 
   if (event.type === 'error') {
     setMessageContent(stream.message, `Text mode request failed: ${event.error}`);
-    stream.message.classList.add('error');
-    delete stream.message.dataset.pending;
+    applyMessagePresentation(stream.message, 'assistant', 'failed', {
+      modality: 'text',
+      source: 'julia-electron-local',
+      projectionState: 'failed',
+    });
     activeTextStreams.delete(event.requestId);
   }
 });
+
+async function executeTextTurn({ conversationId, turnId, text, reason = 'text-turn' }) {
+  const pendingAssistant = appendMessage('assistant', 'Julia is thinking…', {
+    conversationId,
+    turnId,
+    status: 'pending',
+    modality: 'text',
+    metadata: { source: 'julia-electron-local', projection_state: 'local_pending' },
+  });
+  activeTextStreams.set(turnId, { message: pendingAssistant, content: '' });
+
+  const response = await textClient.streamTextMessage({
+    requestId: turnId,
+    conversationId,
+    turnId,
+    modality: 'text',
+    input: text,
+  });
+  if (response.conversation_id !== conversationId || response.turn_id !== turnId) {
+    throw new Error('Julia returned a mismatched conversation turn');
+  }
+
+  if (activeTextStreams.has(turnId)) {
+    setMessageContent(pendingAssistant, response.content);
+    activeTextStreams.delete(turnId);
+  }
+  await textClient.addConversationMessage(conversationId, {
+    turn_id: turnId,
+    role: 'assistant',
+    modality: 'text',
+    content: response.content,
+    status: 'pending',
+    metadata: {
+      source: 'julia-electron-local',
+      projection_state: 'core_returned',
+    },
+  });
+  await syncCanonicalConversation(conversationId, reason);
+  delete pendingAssistant.dataset.pending;
+  return response;
+}
+
+async function retryFailedMessage(messageEl) {
+  if (!messageEl || messageEl.dataset.role !== 'user' || messageEl.dataset.status !== 'failed') return;
+  const conversationId = messageEl.dataset.conversationId || activeConversationId;
+  const turnId = messageEl.dataset.turnId;
+  const text = messageEl.dataset.content || '';
+  if (!conversationId || !turnId || !text.trim()) throw new Error('Retry target is missing conversation, turn, or content');
+
+  const button = messageEl.querySelector('[data-action="retry-message"]');
+  if (button) {
+    button.disabled = true;
+    button.textContent = 'Retrying…';
+  }
+  setConversationNotice('Retrying with the same turn id — waiting for Core truth…', 'syncing');
+  await textClient.addConversationMessage(conversationId, {
+    turn_id: turnId,
+    role: 'user',
+    modality: messageEl.dataset.modality || 'text',
+    content: text,
+    status: 'pending',
+    metadata: {
+      source: 'julia-electron-local',
+      projection_state: 'local_pending',
+      retry_of: turnId,
+    },
+  });
+  applyMessagePresentation(messageEl, 'user', 'pending', {
+    modality: messageEl.dataset.modality || 'text',
+    source: 'julia-electron-local',
+    projectionState: 'local_pending',
+  });
+  messageEl.querySelector('.message-actions')?.classList.add('hidden');
+
+  try {
+    await executeTextTurn({ conversationId, turnId, text, reason: 'text-retry' });
+  } catch (error) {
+    activeTextStreams.delete(turnId);
+    await textClient.addConversationMessage(conversationId, {
+      turn_id: turnId,
+      role: 'user',
+      modality: messageEl.dataset.modality || 'text',
+      content: text,
+      status: 'failed',
+      metadata: {
+        source: 'julia-electron-local',
+        projection_state: 'failed',
+        error: error.message,
+      },
+    }).catch((projectionError) => {
+      console.warn('[V2_LOCAL_PROJECTION_FAILED]', projectionError.message);
+    });
+    const conversation = await textClient.getCurrentConversation().catch(() => null);
+    if (conversation?.conversation_id === conversationId) renderConversationMessages(conversation);
+    throw error;
+  }
+}
 
 async function sendComposerMessage() {
   if (sending) return;
@@ -661,45 +1293,75 @@ async function sendComposerMessage() {
   if (!text) return;
 
   const requestId = createRequestId();
+  const turnId = requestId;
   composerInput.value = '';
-  const userMessage = appendMessage('user', text);
+  const userMessage = appendMessage('user', text, {
+    turnId,
+    status: 'pending',
+    modality: 'text',
+    metadata: { source: 'julia-electron-local', projection_state: 'local_pending' },
+  });
   thread.querySelector('.empty-thread')?.remove();
-  const pending = appendMessage('assistant', 'Julia is thinking…', { pending: true });
-  activeTextStreams.set(requestId, { message: pending, content: '' });
   setComposerBusy(true);
 
+  let conversationId = null;
   try {
-    const conversationId = await ensureActiveConversation();
+    conversationId = await ensureActiveConversation();
+    userMessage.dataset.conversationId = conversationId;
     const userRecord = await textClient.addConversationMessage(conversationId, {
-      turn_id: requestId,
+      turn_id: turnId,
       role: 'user',
       modality: 'text',
       content: text,
+      status: 'pending',
+      metadata: {
+        source: 'julia-electron-local',
+        projection_state: 'local_pending',
+      },
     });
     activeConversationId = userRecord.conversation_id;
     await refreshConversationList();
-
-    const response = await textClient.streamTextMessage(requestId, text);
-    if (activeTextStreams.has(requestId)) {
-      setMessageContent(pending, response.content);
-      activeTextStreams.delete(requestId);
-    }
-    await textClient.addConversationMessage(activeConversationId, {
-      turn_id: requestId,
-      role: 'assistant',
-      modality: 'text',
-      content: response.content,
-    });
-    await refreshConversationList();
-    delete pending.dataset.pending;
+    await executeTextTurn({ conversationId, turnId, text, reason: 'text-turn' });
   } catch (error) {
-    userMessage.classList.toggle('error', !activeConversationId);
-    if (activeTextStreams.has(requestId)) {
-      setMessageContent(pending, `Text mode request failed: ${error.message}`);
-      pending.classList.add('error');
-      delete pending.dataset.pending;
-      activeTextStreams.delete(requestId);
+    if (conversationId) {
+      await textClient.addConversationMessage(conversationId, {
+        turn_id: turnId,
+        role: 'user',
+        modality: 'text',
+        content: text,
+        status: 'failed',
+        metadata: {
+          source: 'julia-electron-local',
+          projection_state: 'failed',
+          error: error.message,
+        },
+      }).catch((projectionError) => {
+        console.warn('[V2_LOCAL_PROJECTION_FAILED]', projectionError.message);
+      });
     }
+    applyMessagePresentation(userMessage, 'user', 'failed', {
+      modality: 'text',
+      source: 'julia-electron-local',
+      projectionState: 'failed',
+    });
+    const actions = userMessage.querySelector('.message-actions');
+    if (actions) {
+      const retry = document.createElement('button');
+      retry.type = 'button';
+      retry.className = 'message-action-button retry-message-button';
+      retry.dataset.action = 'retry-message';
+      retry.textContent = 'Retry';
+      actions.replaceChildren(retry);
+      actions.classList.remove('hidden');
+    }
+    if (activeTextStreams.has(turnId)) {
+      const stream = activeTextStreams.get(turnId);
+      setMessageContent(stream.message, `Text mode request failed: ${error.message}`);
+      stream.message.classList.add('error');
+      delete stream.message.dataset.pending;
+      activeTextStreams.delete(turnId);
+    }
+    setConversationNotice(`Failed — local projection only. ${error.message}`, 'error');
   } finally {
     setComposerBusy(false);
     composerInput.focus();
@@ -740,11 +1402,15 @@ textModeButton.addEventListener('click', () => {
 });
 voiceModeButton.addEventListener('click', () => {
   switchToVoiceMode({ resume: true }).catch((error) => {
+    showSurface('voice');
+    setVoiceLifecycleStatus(`Voice mode unavailable: ${error.message}`, 'error');
     console.error('[V2_MODE_VOICE_FAILED]', error);
   });
 });
 composerVoiceButton.addEventListener('click', () => {
   switchToVoiceMode({ resume: true }).catch((error) => {
+    showSurface('voice');
+    setVoiceLifecycleStatus(`Voice mode unavailable: ${error.message}`, 'error');
     console.error('[V2_MODE_VOICE_FAILED]', error);
   });
 });
@@ -801,6 +1467,27 @@ refreshBrainStatusButton.addEventListener('click', () => {
   });
 });
 
+
+copyDiagnosticsButton?.addEventListener('click', async () => {
+  try {
+    await navigator.clipboard.writeText(buildDiagnosticsText());
+    copyDiagnosticsButton.textContent = 'Copied';
+    setTimeout(() => { copyDiagnosticsButton.textContent = 'Copy diagnostics'; }, 1200);
+  } catch (error) {
+    setSettingsError(`Copy diagnostics failed: ${error.message}`);
+  }
+});
+
+reloadFromCoreButton?.addEventListener('click', () => {
+  reloadActiveConversationFromCore('settings-reload')
+    .catch((error) => setSettingsError(`Reload from Core failed: ${error.message}`));
+});
+
+clearLocalCacheButton?.addEventListener('click', () => {
+  clearLocalCacheAndReload()
+    .catch((error) => setSettingsError(`Clear local cache failed: ${error.message}`));
+});
+
 settingsSaveButton.addEventListener('click', () => {
   setSettingsError('');
   textClient.updateSettings(readSettingsForm())
@@ -839,6 +1526,8 @@ restoreSettingsState().catch((error) => {
     checked_at: new Date().toISOString(),
   });
 });
+setVoiceLifecycleStatus('Voice surface ready. Microphone is off.', 'idle');
+
 restoreConversationState().catch((error) => {
   thread.replaceChildren();
   const message = appendMessage('assistant', `Conversation restore failed: ${error.message}`);

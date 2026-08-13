@@ -5,6 +5,7 @@
   "main": "src/main/main.js",
   "private": true,
   "scripts": {
+    "test:client-c1": "node --test tests/client-c1.test.js",
     "start": "electron .",
     "start:http": "JULIA_WEB_VOICE_URL=http://localhost:7860 electron .",
     "start:https": "JULIA_WEB_VOICE_URL=https://localhost:7860 electron .",

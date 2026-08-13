@@ -32,7 +32,12 @@ async function getBrainStatus(brainEndpoint, timeoutMs = 2500) {
       status: data?.status || 'unknown',
       contract_version: data?.contract_version || null,
       julia_core: data?.julia_core || null,
+      service_version: data?.service_version || data?.version || null,
+      architecture_version: data?.architecture_version || data?.architecture || null,
+      build: data?.build || data?.build_id || null,
+      commit: data?.commit || data?.git_commit || null,
       checked_at: new Date().toISOString(),
+      raw: data && typeof data === 'object' ? data : {},
     };
   } catch (error) {
     return {

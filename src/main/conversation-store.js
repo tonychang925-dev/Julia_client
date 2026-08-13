@@ -1,8 +1,12 @@
 const fs = require('fs');
 const path = require('path');
 
-const STORE_VERSION = 1;
+const STORE_VERSION = 2;
 const DEFAULT_FILE_NAME = 'julia-conversations-v1.json';
+
+// UI cache only. Julia Core ConversationRuntime is the sole authority for
+// cognitive history and conversation continuity. Nothing in this file is sent
+// to Julia as prompt/history/context.
 
 function nowIso() {
   return new Date().toISOString();
@@ -18,6 +22,16 @@ function deriveTitle(text) {
   return title.length > 48 ? `${title.slice(0, 48)}…` : title;
 }
 
+function normalizeProjectionMetadata(metadata = {}) {
+  return {
+    source: metadata.source || 'julia-electron-projection-cache',
+    authority: 'disposable_projection',
+    last_reconciled_at: metadata.last_reconciled_at || null,
+    last_reconcile_error: metadata.last_reconcile_error || null,
+    stale: Boolean(metadata.stale),
+  };
+}
+
 function normalizeConversation(conversation) {
   return {
     conversation_id: conversation.conversation_id,
@@ -25,6 +39,7 @@ function normalizeConversation(conversation) {
     title_updated_by_user: Boolean(conversation.title_updated_by_user),
     created_at: conversation.created_at || nowIso(),
     updated_at: conversation.updated_at || conversation.created_at || nowIso(),
+    projection: normalizeProjectionMetadata(conversation.projection),
     messages: Array.isArray(conversation.messages) ? conversation.messages : [],
   };
 }
@@ -37,6 +52,7 @@ function summarizeConversation(conversation, extra = {}) {
     created_at: normalized.created_at,
     updated_at: normalized.updated_at,
     message_count: normalized.messages.length,
+    projection: normalized.projection,
     ...extra,
   };
 }
@@ -49,6 +65,11 @@ class ConversationStore {
       version: STORE_VERSION,
       currentConversationId: null,
       conversations: [],
+      cache: {
+        kind: 'disposable_projection',
+        authority: 'non_canonical',
+        last_cleared_at: null,
+      },
     };
     this.loaded = false;
   }
@@ -64,13 +85,34 @@ class ConversationStore {
     }
 
     const raw = fs.readFileSync(this.filePath, 'utf8');
-    const parsed = JSON.parse(raw);
+    let parsed;
+    try {
+      parsed = JSON.parse(raw);
+    } catch (error) {
+      const corruptPath = `${this.filePath}.corrupt-${Date.now()}`;
+      fs.renameSync(this.filePath, corruptPath);
+      this.state.cache = {
+        kind: 'disposable_projection',
+        authority: 'non_canonical',
+        last_cleared_at: nowIso(),
+        recovered_from_corruption: path.basename(corruptPath),
+      };
+      this.loaded = true;
+      this.save();
+      return this.state;
+    }
     this.state = {
       version: STORE_VERSION,
       currentConversationId: parsed.currentConversationId || null,
       conversations: Array.isArray(parsed.conversations)
         ? parsed.conversations.map(normalizeConversation)
         : [],
+      cache: {
+        kind: 'disposable_projection',
+        authority: 'non_canonical',
+        last_cleared_at: parsed.cache?.last_cleared_at || null,
+        recovered_from_corruption: parsed.cache?.recovered_from_corruption || null,
+      },
     };
     this.loaded = true;
     return this.state;
@@ -99,10 +141,35 @@ class ConversationStore {
       title_updated_by_user: false,
       created_at: timestamp,
       updated_at: timestamp,
+      projection: normalizeProjectionMetadata(),
       messages: [],
     };
     this.state.conversations.unshift(conversation);
     this.state.currentConversationId = conversation.conversation_id;
+    this.save();
+    return conversation;
+  }
+
+  createConversationWithId(conversationId, title = 'New Conversation') {
+    this.load();
+    const existing = this.getConversation(conversationId);
+    if (existing) {
+      this.state.currentConversationId = conversationId;
+      this.save();
+      return existing;
+    }
+    const timestamp = nowIso();
+    const conversation = {
+      conversation_id: conversationId,
+      title: deriveTitle(title),
+      title_updated_by_user: false,
+      created_at: timestamp,
+      updated_at: timestamp,
+      projection: normalizeProjectionMetadata(),
+      messages: [],
+    };
+    this.state.conversations.unshift(conversation);
+    this.state.currentConversationId = conversationId;
     this.save();
     return conversation;
   }
@@ -150,6 +217,56 @@ class ConversationStore {
       deleted_conversation_id: deleted.conversation_id,
       current_conversation: currentConversation,
     };
+  }
+
+  getCacheStatus() {
+    this.load();
+    const messageCount = this.state.conversations.reduce((total, conversation) => (
+      total + (Array.isArray(conversation.messages) ? conversation.messages.length : 0)
+    ), 0);
+    const staleCount = this.state.conversations.filter((conversation) => conversation.projection?.stale).length;
+    return {
+      kind: 'disposable_projection',
+      authority: 'non_canonical',
+      file_path: this.filePath,
+      conversation_count: this.state.conversations.length,
+      message_count: messageCount,
+      stale_conversation_count: staleCount,
+      current_conversation_id: this.state.currentConversationId,
+      last_cleared_at: this.state.cache?.last_cleared_at || null,
+      recovered_from_corruption: this.state.cache?.recovered_from_corruption || null,
+    };
+  }
+
+  clearLocalCache() {
+    this.load();
+    const previous = this.getCacheStatus();
+    this.state.conversations = [];
+    this.state.currentConversationId = null;
+    this.state.cache = {
+      kind: 'disposable_projection',
+      authority: 'non_canonical',
+      last_cleared_at: nowIso(),
+    };
+    this.save();
+    return {
+      cleared: true,
+      previous,
+      cache: this.getCacheStatus(),
+    };
+  }
+
+  markConversationStale(conversationId, error) {
+    this.load();
+    const conversation = this.getConversation(conversationId);
+    if (!conversation) return null;
+    conversation.projection = normalizeProjectionMetadata({
+      ...conversation.projection,
+      stale: true,
+      last_reconcile_error: error ? String(error) : null,
+    });
+    this.save();
+    return conversation;
   }
 
   searchConversations(query) {
@@ -231,6 +348,17 @@ class ConversationStore {
       throw new Error('Message content is empty');
     }
 
+    const existing = conversation.messages.find((item) => (
+      item.turn_id === normalized.turn_id && item.role === normalized.role
+    ));
+    if (existing) {
+      Object.assign(existing, normalized, { message_id: existing.message_id });
+      conversation.updated_at = timestamp;
+      this.state.currentConversationId = conversation.conversation_id;
+      this.save();
+      return existing;
+    }
+
     conversation.messages.push(normalized);
     conversation.updated_at = timestamp;
     if (!conversation.title_updated_by_user && conversation.title === 'New Conversation' && normalized.role === 'user') {
@@ -239,6 +367,100 @@ class ConversationStore {
     this.state.currentConversationId = conversation.conversation_id;
     this.save();
     return normalized;
+  }
+
+  reconcileCanonicalMessages(conversationId, canonical = {}) {
+    this.load();
+    let conversation = this.getConversation(conversationId);
+    if (!conversation) {
+      const timestamp = nowIso();
+      conversation = {
+        conversation_id: conversationId,
+        title: canonical.title || 'New Conversation',
+        title_updated_by_user: false,
+        created_at: timestamp,
+        updated_at: timestamp,
+        projection: normalizeProjectionMetadata(),
+        messages: [],
+      };
+      this.state.conversations.unshift(conversation);
+    }
+
+    let inserted = 0;
+    let updated = 0;
+    let removedLocal = 0;
+    const canonicalMessages = Array.isArray(canonical.messages) ? canonical.messages : [];
+
+    conversation.projection = normalizeProjectionMetadata({
+      ...conversation.projection,
+      stale: false,
+      last_reconciled_at: nowIso(),
+      last_reconcile_error: null,
+    });
+
+    for (const message of canonicalMessages) {
+      const canonicalStatus = String(message?.status || '');
+      const acceptedStatus = canonicalStatus === 'completed'
+        || (message?.role === 'assistant' && canonicalStatus === 'interrupted');
+      if (
+        !message
+        || !acceptedStatus
+        || !['user', 'assistant'].includes(message.role)
+        || !String(message.message_id || '').trim()
+        || (message.turn_id && !String(message.turn_id || '').trim())
+        || !String(message.content || '').trim()
+      ) continue;
+
+      const normalized = {
+        message_id: String(message.message_id),
+        conversation_id: conversationId,
+        turn_id: String(message.turn_id),
+        role: message.role,
+        modality: message.modality === 'voice' ? 'voice' : 'text',
+        content: String(message.content),
+        status: canonicalStatus,
+        created_at: message.created_at || nowIso(),
+        metadata: { source: 'julia-core-canonical' },
+      };
+
+      const index = conversation.messages.findIndex((item) => (
+        item.message_id === normalized.message_id
+        || (item.turn_id === normalized.turn_id && item.role === normalized.role)
+      ));
+      if (index >= 0) {
+        conversation.messages[index] = normalized;
+        updated += 1;
+      } else {
+        conversation.messages.push(normalized);
+        inserted += 1;
+      }
+    }
+
+    conversation.messages = conversation.messages.filter((message) => {
+      const isUnconfirmedLocal = message.metadata?.source === 'julia-electron-local'
+        && ['pending', 'failed'].includes(message.status);
+      if (!isUnconfirmedLocal) return true;
+      removedLocal += 1;
+      return false;
+    });
+
+    conversation.messages.sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)));
+    if (canonical.title && canonical.title !== 'New Conversation') {
+      conversation.title = canonical.title;
+    }
+    conversation.updated_at = conversation.messages.at(-1)?.created_at || conversation.updated_at || nowIso();
+    this.state.currentConversationId = conversationId;
+    this.save();
+
+    return {
+      conversation,
+      reconciliation: {
+        canonical_count: canonicalMessages.length,
+        inserted,
+        updated,
+        removed_local: removedLocal,
+      },
+    };
   }
 }
 
@@ -250,4 +472,5 @@ module.exports = {
   ConversationStore,
   createConversationStore,
   deriveTitle,
+  normalizeProjectionMetadata,
 };

@@ -1,46 +1,165 @@
-const DEFAULT_TEXT_API_URL = 'http://127.0.0.1:18089/v1/chat/completions';
+const DEFAULT_BRAIN_ENDPOINT = 'http://127.0.0.1:18089';
 
-function buildTextApiUrl(brainEndpoint) {
-  return new URL('/v1/chat/completions', brainEndpoint).toString();
+function buildConversationTurnApiUrl(brainEndpoint, conversationId) {
+  const id = String(conversationId || '').trim();
+  if (!id) throw new Error('Conversation ID is required');
+  return new URL(
+    `/internal/v1/conversations/${encodeURIComponent(id)}/turns`,
+    brainEndpoint || DEFAULT_BRAIN_ENDPOINT
+  ).toString();
 }
 
-function getTextApiUrl(options = {}) {
-  if (process.env.JULIA_TEXT_API_URL) return process.env.JULIA_TEXT_API_URL;
-  if (options.brainEndpoint) return buildTextApiUrl(options.brainEndpoint);
-  return DEFAULT_TEXT_API_URL;
+function buildConversationMessagesApiUrl(brainEndpoint, conversationId) {
+  const id = String(conversationId || '').trim();
+  if (!id) throw new Error('Conversation ID is required');
+  return new URL(
+    `/internal/v1/conversations/${encodeURIComponent(id)}/messages`,
+    brainEndpoint || DEFAULT_BRAIN_ENDPOINT
+  ).toString();
 }
 
-function assertTextMessage(input) {
+function buildConversationsApiUrl(brainEndpoint) {
+  return new URL('/internal/v1/conversations', brainEndpoint || DEFAULT_BRAIN_ENDPOINT).toString();
+}
+
+function buildConversationDetailApiUrl(brainEndpoint, conversationId) {
+  const id = String(conversationId || '').trim();
+  if (!id) throw new Error('Conversation ID is required');
+  return new URL(
+    `/internal/v1/conversations/${encodeURIComponent(id)}`,
+    brainEndpoint || DEFAULT_BRAIN_ENDPOINT
+  ).toString();
+}
+
+async function getConversationDetail(conversationId, options = {}) {
+  const response = await fetch(buildConversationDetailApiUrl(options.brainEndpoint, conversationId), {
+    method: 'GET', headers: { Accept: 'application/json' },
+  });
+  if (!response.ok) {
+    const error = new Error(`Julia conversation detail failed: HTTP ${response.status}`);
+    error.status = response.status;
+    throw error;
+  }
+  return response.json();
+}
+
+function getTextApiUrl(input, options = {}) {
+  if (process.env.JULIA_TEXT_API_URL) {
+    return buildConversationTurnApiUrl(process.env.JULIA_TEXT_API_URL, input?.conversationId);
+  }
+  return buildConversationTurnApiUrl(options.brainEndpoint, input?.conversationId);
+}
+
+function getConversationTurnApiTemplate(options = {}) {
+  const endpoint = process.env.JULIA_TEXT_API_URL || options.brainEndpoint || DEFAULT_BRAIN_ENDPOINT;
+  return new URL('/internal/v1/conversations/{conversation_id}/turns', endpoint).toString();
+}
+
+function normalizeTurnRequest(input) {
   if (!input || typeof input !== 'object') {
-    throw new Error('Text request must be an object');
+    throw new Error('Conversation turn request must be an object');
   }
 
-  const text = String(input.text || '').trim();
+  const conversationId = String(input.conversationId || '').trim();
+  const turnId = String(input.turnId || '').trim();
+  const modality = String(input.modality || 'text').trim().toLowerCase();
+  const text = String(input.input ?? input.text ?? '').trim();
+
+  if (!conversationId) throw new Error('Conversation ID is required');
+  if (!turnId) throw new Error('Turn ID is required');
+  if (!['text', 'voice'].includes(modality)) throw new Error(`Unsupported modality: ${modality}`);
   if (!text) throw new Error('Text message is empty');
   if (text.length > 8000) throw new Error('Text message is too long');
 
-  return text;
+  return { conversationId, turnId, modality, text };
+}
+
+function buildTurnBody(turn, stream) {
+  return {
+    turn_id: turn.turnId,
+    modality: turn.modality,
+    input: turn.text,
+    stream,
+  };
+}
+
+async function getConversationMessages(conversationId, options = {}) {
+  const id = String(conversationId || '').trim();
+  const url = buildConversationMessagesApiUrl(options.brainEndpoint, id);
+  const response = await fetch(url, {
+    method: 'GET',
+    headers: { Accept: 'application/json' },
+  });
+
+  if (!response.ok) {
+    const body = await response.text().catch(() => '');
+    const error = new Error(`Julia conversation sync failed: HTTP ${response.status}${body ? ` ${body.slice(0, 240)}` : ''}`);
+    error.status = response.status;
+    throw error;
+  }
+
+  const data = await response.json();
+  if (data?.conversation_id !== id) {
+    throw new Error(`Julia conversation sync mismatch: ${data?.conversation_id || 'missing'} != ${id}`);
+  }
+  if (!Array.isArray(data.messages)) {
+    throw new Error('Julia conversation sync response did not contain messages');
+  }
+
+  const messages = data.messages.filter((message) => {
+    if (
+      !message
+      || !['user', 'assistant'].includes(message.role)
+      || typeof message.message_id !== 'string'
+      || (message.turn_id != null && typeof message.turn_id !== 'string')
+      || typeof message.content !== 'string'
+    ) return false;
+
+    if (message.status === 'completed') return true;
+    return message.role === 'assistant'
+      && message.status === 'interrupted'
+      && message.content.trim().length > 0;
+  });
+  return {
+    conversation_id: id,
+    title: typeof data.title === 'string' ? data.title : 'New Conversation',
+    last_message_id: String(data.last_message_id || data.messages.at(-1)?.message_id || ''),
+    messages,
+  };
+}
+
+async function ensureConversationMessages(conversationId, title = 'New Conversation', options = {}) {
+  try {
+    await getConversationDetail(conversationId, options);
+  } catch (error) {
+    if (error.status !== 404) throw error;
+    const response = await fetch(buildConversationsApiUrl(options.brainEndpoint), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify({ conversation_id: conversationId, title }),
+    });
+    if (!response.ok && response.status !== 409) {
+      const body = await response.text().catch(() => '');
+      throw new Error(`Julia conversation create failed: HTTP ${response.status}${body ? ` ${body.slice(0, 240)}` : ''}`);
+    }
+  }
+  return getConversationMessages(conversationId, options);
+}
+
+async function commitExternalTurns() {
+  throw new Error('CC-1: Electron must not commit Voice workspace/external turns; Voice turns must flow S2S → Brain → ConversationRuntime under canonical conversation_id');
 }
 
 async function sendTextMessage(input, options = {}) {
-  const text = assertTextMessage(input);
-  const url = getTextApiUrl(options);
+  const turn = normalizeTurnRequest(input);
+  const url = getTextApiUrl(turn, options);
 
   const response = await fetch(url, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify({
-      model: 'julia-brain',
-      stream: false,
-      messages: [
-        {
-          role: 'user',
-          content: text,
-        },
-      ],
-    }),
+    body: JSON.stringify(buildTurnBody(turn, false)),
   });
 
   if (!response.ok) {
@@ -49,16 +168,26 @@ async function sendTextMessage(input, options = {}) {
   }
 
   const data = await response.json();
-  const content = data?.choices?.[0]?.message?.content;
+  if (data?.conversation_id && data.conversation_id !== turn.conversationId) {
+    throw new Error(`Julia conversation mismatch: ${data.conversation_id} != ${turn.conversationId}`);
+  }
+  if (data?.turn_id && data.turn_id !== turn.turnId) {
+    throw new Error(`Julia turn mismatch: ${data.turn_id} != ${turn.turnId}`);
+  }
+
+  const content = data?.content;
   if (typeof content !== 'string' || !content.trim()) {
     throw new Error('Julia text response did not contain assistant content');
   }
 
   return {
+    conversation_id: data.conversation_id || turn.conversationId,
+    turn_id: data.turn_id || turn.turnId,
     role: 'assistant',
     content,
+    status: data.status || 'completed',
     createdAt: new Date().toISOString(),
-    source: 'julia-brain-text',
+    source: 'julia-native-conversation',
   };
 }
 
@@ -77,6 +206,7 @@ function parseOpenAiSseChunk(line) {
     return {
       done: finishReason === 'stop',
       delta,
+      error: finishReason === 'error' ? (delta || 'Julia conversation turn failed') : null,
     };
   } catch (error) {
     return {
@@ -87,8 +217,8 @@ function parseOpenAiSseChunk(line) {
 }
 
 async function streamTextMessage(input, handlers = {}, options = {}) {
-  const text = assertTextMessage(input);
-  const url = getTextApiUrl(options);
+  const turn = normalizeTurnRequest(input);
+  const url = getTextApiUrl(turn, options);
   const onDelta = typeof handlers.onDelta === 'function' ? handlers.onDelta : () => {};
 
   const response = await fetch(url, {
@@ -96,16 +226,7 @@ async function streamTextMessage(input, handlers = {}, options = {}) {
     headers: {
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify({
-      model: 'julia-brain',
-      stream: true,
-      messages: [
-        {
-          role: 'user',
-          content: text,
-        },
-      ],
-    }),
+    body: JSON.stringify(buildTurnBody(turn, true)),
   });
 
   if (!response.ok) {
@@ -157,17 +278,46 @@ async function streamTextMessage(input, handlers = {}, options = {}) {
   }
 
   return {
+    conversation_id: turn.conversationId,
+    turn_id: turn.turnId,
     role: 'assistant',
     content,
+    status: 'completed',
     createdAt: new Date().toISOString(),
-    source: 'julia-brain-text-stream',
+    source: 'julia-native-conversation-stream',
   };
 }
 
+async function createConversationViaCore(title = 'New Conversation', options = {}) {
+  const url = buildConversationsApiUrl(options.brainEndpoint);
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: JSON.stringify({ title }),
+  });
+  if (!response.ok) {
+    const body = await response.text().catch(() => '');
+    throw new Error(`Core create failed: HTTP ${response.status}${body ? ` ${body.slice(0, 200)}` : ''}`);
+  }
+  return response.json();
+}
+
 module.exports = {
-  DEFAULT_TEXT_API_URL,
-  buildTextApiUrl,
+  DEFAULT_BRAIN_ENDPOINT,
+  buildConversationMessagesApiUrl,
+  buildConversationDetailApiUrl,
+  buildConversationsApiUrl,
+  buildConversationTurnApiUrl,
+  buildTurnBody,
+  getConversationTurnApiTemplate,
+  getConversationMessages,
+  getConversationDetail,
+  ensureConversationMessages,
+  createConversationViaCore,
+  commitExternalTurns,
   getTextApiUrl,
+  normalizeTurnRequest,
+  parseOpenAiSseChunk,
   sendTextMessage,
   streamTextMessage,
 };

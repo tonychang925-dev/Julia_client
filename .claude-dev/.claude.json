@@ -1,0 +1,27 @@
+{
+  "firstStartTime": "2026-08-11T13:10:13.553Z",
+  "opusProMigrationComplete": true,
+  "sonnet1m45MigrationComplete": true,
+  "migrationVersion": 11,
+  "userID": "b1ef1bb100af63c34532a90a3e4bcda69989af476087a5baa59be5a5d6966295",
+  "changelogLastFetched": 1786453814405,
+  "appleTerminalSetupInProgress": false,
+  "appleTerminalBackupPath": "/Users/admin/Library/Preferences/com.apple.Terminal.plist.bak",
+  "optionAsMetaKeyInstalled": true,
+  "projects": {
+    "/Users/admin/julia_electron_v2": {
+      "allowedTools": [],
+      "mcpContextUris": [],
+      "mcpServers": {},
+      "enabledMcpjsonServers": [],
+      "disabledMcpjsonServers": [],
+      "hasTrustDialogAccepted": false,
+      "projectOnboardingSeenCount": 0,
+      "hasClaudeMdExternalIncludesApproved": false,
+      "hasClaudeMdExternalIncludesWarningShown": false,
+      "hasCompletedProjectOnboarding": true
+    }
+  },
+  "hasCompletedOnboarding": true,
+  "lastOnboardingVersion": "2.1.88-source.0"
+}

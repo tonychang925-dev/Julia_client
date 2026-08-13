@@ -2,7 +2,15 @@ const { app, globalShortcut, ipcMain, Menu, nativeImage, Tray } = require('elect
 const { getWebVoiceUrl, isAllowedLocalDevCertUrl } = require('./config');
 const { installPermissions } = require('./permissions');
 const { createMainWindow } = require('./window');
-const { sendTextMessage, streamTextMessage, getTextApiUrl } = require('./text-client');
+const {
+  sendTextMessage,
+  streamTextMessage,
+  getConversationMessages,
+  ensureConversationMessages,
+  createConversationViaCore,
+  commitExternalTurns,
+  getConversationTurnApiTemplate,
+} = require('./text-client');
 const { createConversationStore } = require('./conversation-store');
 const { createSettingsStore } = require('./settings-store');
 const { getBrainStatus } = require('./brain-status');
@@ -12,6 +20,8 @@ let conversationStore = null;
 let settingsStore = null;
 let tray = null;
 let isQuitting = false;
+let quitPrepared = false;
+let quitPreparationInFlight = false;
 
 function getConversationStore() {
   if (!conversationStore) {
@@ -99,6 +109,25 @@ function toggleMainWindow() {
   else showMainWindow();
 }
 
+async function requestQuit(reason = 'quit') {
+  if (quitPrepared || quitPreparationInFlight) return;
+  quitPreparationInFlight = true;
+  try {
+    const result = await prepareRendererForHidden(reason);
+    if (!result?.ok) {
+      console.warn('[V2_QUIT_BLOCKED]', result);
+      showMainWindow();
+      return;
+    }
+    persistWindowState();
+    quitPrepared = true;
+    isQuitting = true;
+    app.quit();
+  } finally {
+    quitPreparationInFlight = false;
+  }
+}
+
 function createTrayImage() {
   const svg = `
     <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32">
@@ -139,9 +168,9 @@ function updateTray() {
     {
       label: 'Quit Julia',
       click: () => {
-        isQuitting = true;
-        persistWindowState();
-        app.quit();
+        requestQuit('tray-quit').catch((error) => {
+          console.warn('[V2_QUIT_FAILED]', error.message);
+        });
       },
     },
   ]));
@@ -178,6 +207,11 @@ function attachWindowLifecycle(win) {
       hideMainWindow('close').catch((error) => {
         console.warn('[V2_CLOSE_HIDE_FAILED]', error.message);
       });
+    } else if (!isQuitting && settings.closeBehavior === 'quit') {
+      event.preventDefault();
+      requestQuit('close-quit').catch((error) => {
+        console.warn('[V2_CLOSE_QUIT_FAILED]', error.message);
+      });
     }
   });
 
@@ -203,6 +237,8 @@ ipcMain.handle('julia:text:stream', async (event, input) => {
         onDelta: (delta, content) => {
           event.sender.send('julia:text:stream-event', {
             requestId,
+            conversationId: input?.conversationId,
+            turnId: input?.turnId,
             type: 'delta',
             delta,
             content,
@@ -214,6 +250,8 @@ ipcMain.handle('julia:text:stream', async (event, input) => {
 
     event.sender.send('julia:text:stream-event', {
       requestId,
+      conversationId: result.conversation_id,
+      turnId: result.turn_id,
       type: 'done',
       content: result.content,
     });
@@ -222,6 +260,8 @@ ipcMain.handle('julia:text:stream', async (event, input) => {
   } catch (error) {
     event.sender.send('julia:text:stream-event', {
       requestId,
+      conversationId: input?.conversationId,
+      turnId: input?.turnId,
       type: 'error',
       error: error.message,
     });
@@ -238,7 +278,14 @@ ipcMain.handle('julia:conversation:current', async () => {
 });
 
 ipcMain.handle('julia:conversation:create', async (_event, input) => {
-  return getConversationStore().createConversation(input?.title || 'New Conversation');
+  const title = input?.title || 'New Conversation';
+  try {
+    const canonical = await createConversationViaCore(title, getTextClientOptions());
+    return getConversationStore().createConversationWithId(canonical.conversation_id, title);
+  } catch (error) {
+    console.warn('[V2_CREATE_CORE_FAILED]', error.message);
+    return getConversationStore().createConversation(title);
+  }
 });
 
 ipcMain.handle('julia:conversation:open', async (_event, input) => {
@@ -259,6 +306,44 @@ ipcMain.handle('julia:conversation:delete', async (_event, input) => {
 
 ipcMain.handle('julia:conversation:search', async (_event, input) => {
   return getConversationStore().searchConversations(input?.query);
+});
+
+ipcMain.handle('julia:cache:status', async () => {
+  return getConversationStore().getCacheStatus();
+});
+
+ipcMain.handle('julia:cache:clear-local', async () => {
+  return getConversationStore().clearLocalCache();
+});
+
+ipcMain.handle('julia:conversation:sync', async (_event, input) => {
+  const conversationId = String(input?.conversationId || '').trim();
+  if (!conversationId) throw new Error('Conversation ID is required');
+  const cached = getConversationStore().getConversation(conversationId);
+  let canonical;
+  try {
+    canonical = await ensureConversationMessages(
+      conversationId,
+      cached?.title || 'New Conversation',
+      getTextClientOptions()
+    );
+  } catch (error) {
+    getConversationStore().markConversationStale(conversationId, error.message);
+    throw error;
+  }
+  return {
+    ...getConversationStore().reconcileCanonicalMessages(conversationId, canonical),
+    canonical: {
+      conversation_id: canonical.conversation_id,
+      title: canonical.title,
+      last_message_id: canonical.last_message_id,
+      messages: canonical.messages,
+    },
+  };
+});
+
+ipcMain.handle('julia:conversation:commit-external', async (_event, input) => {
+  return commitExternalTurns(input, getTextClientOptions());
 });
 
 ipcMain.handle('julia:settings:get', async () => {
@@ -290,7 +375,7 @@ app.whenReady().then(async () => {
   settingsStore = createSettingsStore(app.getPath('userData'));
   settingsStore.load();
   console.log('[V2_SETTINGS_STORE]', settingsStore.filePath);
-  console.log('[V2_TEXT_API_URL]', getTextApiUrl(getTextClientOptions()));
+  console.log('[V2_TEXT_API_URL]', getConversationTurnApiTemplate(getTextClientOptions()));
   conversationStore = createConversationStore(app.getPath('userData'));
   conversationStore.load();
   console.log('[V2_CONVERSATION_STORE]', conversationStore.filePath);
@@ -321,9 +406,12 @@ app.on('activate', () => {
   showMainWindow();
 });
 
-app.on('before-quit', () => {
-  isQuitting = true;
-  persistWindowState();
+app.on('before-quit', (event) => {
+  if (quitPrepared) return;
+  event.preventDefault();
+  requestQuit('app-quit').catch((error) => {
+    console.warn('[V2_QUIT_FAILED]', error.message);
+  });
 });
 
 app.on('will-quit', () => {

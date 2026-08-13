@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.julia.tunnel.voice-local.watchdog</string>
+  <key>ProgramArguments</key><array><string>/Users/admin/.julia_ops/bin/health-voice-tunnels</string></array>
+  <key>RunAtLoad</key><true/>
+  <key>StartInterval</key><integer>60</integer>
+  <key>StandardOutPath</key><string>/Users/admin/.julia_ops/logs/voice-tunnel-watchdog.out.log</string>
+  <key>StandardErrorPath</key><string>/Users/admin/.julia_ops/logs/voice-tunnel-watchdog.err.log</string>
+</dict>
+</plist>

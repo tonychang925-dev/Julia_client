@@ -66,7 +66,8 @@
             <div class="voice-toolbar">
               <div>
                 <div class="voice-state">Julia Voice</div>
-                <div id="voiceLifecycleStatus" class="voice-lifecycle-status">Voice surface ready. Microphone is off.</div>
+                <div class="voice-status-row"><span id="voicePhasePill" class="voice-phase-pill">Idle</span><span id="voiceLifecycleStatus" class="voice-lifecycle-status">Voice surface ready. Microphone is off.</span></div>
+                <div id="voiceStateHint" class="voice-state-hint">Microphone is off.</div>
               </div>
               <div class="voice-actions">
                 <button id="resumeVoiceButton" class="primary-action" type="button">Start Voice</button>
@@ -125,7 +126,20 @@
                 <input id="brainEndpointSetting" type="url" spellcheck="false" />
               </label>
               <div id="brainStatusDetails" class="settings-status">Checking Julia Brain…</div>
-              <button id="refreshBrainStatusButton" class="secondary-action" type="button">Refresh status</button>
+              <div class="settings-button-row">
+                <button id="refreshBrainStatusButton" class="secondary-action" type="button">Refresh status</button>
+                <button id="copyDiagnosticsButton" class="secondary-action" type="button">Copy diagnostics</button>
+              </div>
+            </div>
+
+            <div class="settings-section">
+              <h3>Local Cache</h3>
+              <p class="settings-help">Disposable projection only. Core remains canonical.</p>
+              <div id="cacheStatusDetails" class="settings-status">Checking local cache…</div>
+              <div class="settings-button-row">
+                <button id="reloadFromCoreButton" class="secondary-action" type="button">Reload from Core</button>
+                <button id="clearLocalCacheButton" class="secondary-action danger" type="button">Clear Local Cache</button>
+              </div>
             </div>
 
             <div class="settings-section">
@@ -154,6 +168,7 @@
       </section>
     </div>
 
+    <script src="./voice-ux-state.js"></script>
     <script src="./app.js"></script>
   </body>
 </html>
