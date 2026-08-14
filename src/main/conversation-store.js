@@ -170,6 +170,29 @@ class ConversationStore {
     return conversation;
   }
 
+  projectConversation(conversationId, title = 'New Conversation') {
+    // CM-S5-R1B: project a canonical conversation WITHOUT changing the
+    // current selection (used by list).
+    const id = String(conversationId || '').trim();
+    if (!id) throw new Error('Canonical conversation_id is required');
+    this.load();
+    const existing = this.getConversation(id);
+    if (existing) return existing;
+    const timestamp = nowIso();
+    const conversation = {
+      conversation_id: id,
+      title: deriveTitle(title),
+      title_updated_by_user: false,
+      created_at: timestamp,
+      updated_at: timestamp,
+      projection: normalizeProjectionMetadata(),
+      messages: [],
+    };
+    this.state.conversations.unshift(conversation);
+    this.save();
+    return conversation;
+  }
+
   renameConversation(conversationId, title) {
     this.load();
     const conversation = this.getConversation(conversationId);

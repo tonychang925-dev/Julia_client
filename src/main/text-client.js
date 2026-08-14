@@ -297,6 +297,23 @@ async function createConversationViaCore(title = 'New Conversation', options = {
   return { ...data, conversation_id: conversationId };
 }
 
+async function listConversationsViaCore(options = {}) {
+  const url = buildConversationsApiUrl(options.brainEndpoint);
+  const response = await fetch(url, {
+    method: 'GET',
+    headers: { Accept: 'application/json' },
+  });
+  if (!response.ok) {
+    const body = await response.text().catch(() => '');
+    throw new Error(`Core list failed: HTTP ${response.status}${body ? ` ${body.slice(0, 200)}` : ''}`);
+  }
+  const data = await response.json();
+  if (!Array.isArray(data)) {
+    throw new Error('Core list response did not contain an array');
+  }
+  return data;
+}
+
 module.exports = {
   DEFAULT_BRAIN_ENDPOINT,
   buildConversationMessagesApiUrl,
@@ -309,6 +326,7 @@ module.exports = {
   getConversationDetail,
   ensureConversationMessages,
   createConversationViaCore,
+  listConversationsViaCore,
   commitExternalTurns,
   getTextApiUrl,
   normalizeTurnRequest,

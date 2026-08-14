@@ -8,6 +8,7 @@ const {
   getConversationMessages,
   ensureConversationMessages,
   createConversationViaCore,
+  listConversationsViaCore,
   commitExternalTurns,
   getConversationTurnApiTemplate,
 } = require('./text-client');
@@ -270,7 +271,13 @@ ipcMain.handle('julia:text:stream', async (event, input) => {
 });
 
 ipcMain.handle('julia:conversation:list', async () => {
-  return getConversationStore().listConversations();
+  // CM-S5-R1B: list = project canonical Brain list (never local fabrication).
+  const canonical = await listConversationsViaCore(getTextClientOptions());
+  const store = getConversationStore();
+  for (const conv of canonical) {
+    store.projectConversation(conv.conversation_id, conv.title || 'New Conversation');
+  }
+  return store.listConversations();
 });
 
 ipcMain.handle('julia:conversation:current', async () => {
@@ -285,7 +292,20 @@ ipcMain.handle('julia:conversation:create', async (_event, input) => {
 });
 
 ipcMain.handle('julia:conversation:open', async (_event, input) => {
-  return getConversationStore().setCurrentConversation(input?.conversationId);
+  // CM-S5-R1B: open/resume = select + project existing canonical truth.
+  // Unknown id → 404 propagates (never local create / upload / reconstruct).
+  const conversationId = String(input?.conversationId || '').trim();
+  if (!conversationId) throw new Error('Conversation ID is required');
+  const store = getConversationStore();
+  const cached = store.getConversation(conversationId);
+  const canonical = await ensureConversationMessages(
+    conversationId,
+    cached?.title || 'New Conversation',
+    getTextClientOptions()
+  );
+  store.reconcileCanonicalMessages(conversationId, canonical);
+  store.setCurrentConversation(conversationId);
+  return store.getCurrentConversation();
 });
 
 ipcMain.handle('julia:conversation:add-message', async (_event, input) => {
