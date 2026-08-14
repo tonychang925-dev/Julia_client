@@ -279,13 +279,9 @@ ipcMain.handle('julia:conversation:current', async () => {
 
 ipcMain.handle('julia:conversation:create', async (_event, input) => {
   const title = input?.title || 'New Conversation';
-  try {
-    const canonical = await createConversationViaCore(title, getTextClientOptions());
-    return getConversationStore().createConversationWithId(canonical.conversation_id, title);
-  } catch (error) {
-    console.warn('[V2_CREATE_CORE_FAILED]', error.message);
-    return getConversationStore().createConversation(title);
-  }
+  // CM-S5-R1A: Brain failure = failure. No fallback to a local fabricated id.
+  const canonical = await createConversationViaCore(title, getTextClientOptions());
+  return getConversationStore().createConversationWithId(canonical.conversation_id, title);
 });
 
 ipcMain.handle('julia:conversation:open', async (_event, input) => {

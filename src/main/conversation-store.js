@@ -132,22 +132,13 @@ class ConversationStore {
       .map((conversation) => summarizeConversation(conversation));
   }
 
-  createConversation(title = 'New Conversation') {
-    this.load();
-    const timestamp = nowIso();
-    const conversation = {
-      conversation_id: createId('conv'),
-      title: deriveTitle(title),
-      title_updated_by_user: false,
-      created_at: timestamp,
-      updated_at: timestamp,
-      projection: normalizeProjectionMetadata(),
-      messages: [],
-    };
-    this.state.conversations.unshift(conversation);
-    this.state.currentConversationId = conversation.conversation_id;
-    this.save();
-    return conversation;
+  createConversation(title = 'New Conversation', canonicalId) {
+    // CM-S5-R1A: Electron MUST NOT fabricate a local canonical conversation_id.
+    // Canonical id must come from Core/Brain. Missing → fail closed.
+    if (!canonicalId) {
+      throw new Error('Canonical conversation_id is required; Electron must not fabricate a local id');
+    }
+    return this.createConversationWithId(canonicalId, title);
   }
 
   createConversationWithId(conversationId, title = 'New Conversation') {
@@ -193,29 +184,18 @@ class ConversationStore {
     if (index < 0) throw new Error(`Conversation not found: ${conversationId}`);
 
     const [deleted] = this.state.conversations.splice(index, 1);
-    let currentConversation = null;
-
     if (this.state.currentConversationId === conversationId) {
-      if (this.state.conversations.length > 0) {
-        this.state.conversations.sort((a, b) => String(b.updated_at).localeCompare(String(a.updated_at)));
-        currentConversation = this.state.conversations[0];
-        this.state.currentConversationId = currentConversation.conversation_id;
-      } else {
-        this.state.currentConversationId = null;
-        currentConversation = this.createConversation('New Conversation');
-        return {
-          deleted_conversation_id: deleted.conversation_id,
-          current_conversation: currentConversation,
-        };
-      }
-    } else if (this.state.currentConversationId) {
-      currentConversation = this.getConversation(this.state.currentConversationId);
+      // CM-S5-R1A: deleting the last projection leaves empty state — never
+      // auto-create a replacement (which would fabricate a local id).
+      this.state.currentConversationId = this.state.conversations[0]?.conversation_id || null;
     }
 
     this.save();
     return {
       deleted_conversation_id: deleted.conversation_id,
-      current_conversation: currentConversation,
+      current_conversation: this.state.currentConversationId
+        ? this.getConversation(this.state.currentConversationId)
+        : null,
     };
   }
 
@@ -299,19 +279,12 @@ class ConversationStore {
   }
 
   getCurrentConversation() {
+    // CM-S5-R1A: pure getter. Empty → null. MUST NOT mutate the store.
     this.load();
     if (this.state.currentConversationId) {
-      const current = this.getConversation(this.state.currentConversationId);
-      if (current) return current;
+      return this.getConversation(this.state.currentConversationId) || null;
     }
-
-    if (this.state.conversations.length > 0) {
-      this.state.currentConversationId = this.state.conversations[0].conversation_id;
-      this.save();
-      return this.state.conversations[0];
-    }
-
-    return this.createConversation('New Conversation');
+    return null;
   }
 
   setCurrentConversation(conversationId) {

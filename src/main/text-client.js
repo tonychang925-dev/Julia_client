@@ -129,20 +129,9 @@ async function getConversationMessages(conversationId, options = {}) {
 }
 
 async function ensureConversationMessages(conversationId, title = 'New Conversation', options = {}) {
-  try {
-    await getConversationDetail(conversationId, options);
-  } catch (error) {
-    if (error.status !== 404) throw error;
-    const response = await fetch(buildConversationsApiUrl(options.brainEndpoint), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-      body: JSON.stringify({ conversation_id: conversationId, title }),
-    });
-    if (!response.ok && response.status !== 409) {
-      const body = await response.text().catch(() => '');
-      throw new Error(`Julia conversation create failed: HTTP ${response.status}${body ? ` ${body.slice(0, 240)}` : ''}`);
-    }
-  }
+  // CM-S5-R1A: unknown canonical id → 404 propagates. NEVER resurrect/create via
+  // POST. Creating a conversation is only ever the explicit createConversationViaCore().
+  await getConversationDetail(conversationId, options);
   return getConversationMessages(conversationId, options);
 }
 
