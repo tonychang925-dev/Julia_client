@@ -142,16 +142,21 @@ class ConversationStore {
   }
 
   createConversationWithId(conversationId, title = 'New Conversation') {
+    // CM-S5-R1A: projection store invariant — canonical id must be non-empty.
+    const id = String(conversationId || '').trim();
+    if (!id) {
+      throw new Error('Canonical conversation_id is required');
+    }
     this.load();
-    const existing = this.getConversation(conversationId);
+    const existing = this.getConversation(id);
     if (existing) {
-      this.state.currentConversationId = conversationId;
+      this.state.currentConversationId = id;
       this.save();
       return existing;
     }
     const timestamp = nowIso();
     const conversation = {
-      conversation_id: conversationId,
+      conversation_id: id,
       title: deriveTitle(title),
       title_updated_by_user: false,
       created_at: timestamp,
@@ -160,7 +165,7 @@ class ConversationStore {
       messages: [],
     };
     this.state.conversations.unshift(conversation);
-    this.state.currentConversationId = conversationId;
+    this.state.currentConversationId = id;
     this.save();
     return conversation;
   }

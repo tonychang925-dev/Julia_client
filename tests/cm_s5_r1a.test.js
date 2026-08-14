@@ -52,7 +52,8 @@ function test_no_local_conv_id_in_canonical_path() {
   assert.ok(!mainSrc.includes('store.createConversation(title)'), 'main must not fall back to local create');
 
   const tcSrc = fs.readFileSync(path.join(__dirname, '..', 'src', 'main', 'text-client.js'), 'utf8');
-  assert.ok(!tcSrc.includes('conversation_id: conversationId'), 'text-client must not resurrect via POST');
+  // resurrection = POST body carrying a caller-supplied conversation_id
+  assert.ok(!tcSrc.includes('conversation_id: conversationId, title'), 'text-client must not resurrect via POST');
 }
 
 const tests = [

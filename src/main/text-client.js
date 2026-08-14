@@ -288,7 +288,13 @@ async function createConversationViaCore(title = 'New Conversation', options = {
     const body = await response.text().catch(() => '');
     throw new Error(`Core create failed: HTTP ${response.status}${body ? ` ${body.slice(0, 200)}` : ''}`);
   }
-  return response.json();
+  const data = await response.json();
+  // CM-S5-R1A: canonical conversation_id must be proven non-empty from Brain.
+  const conversationId = String(data?.conversation_id || '').trim();
+  if (!conversationId) {
+    throw new Error('Core create response did not contain canonical conversation_id');
+  }
+  return { ...data, conversation_id: conversationId };
 }
 
 module.exports = {
