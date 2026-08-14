@@ -210,10 +210,9 @@ class ConversationStore {
         : 'New Conversation';
       const existing = this.getConversation(id);
       if (existing) {
-        // canonical title refreshes presentation metadata
-        if (canonicalTitle !== 'New Conversation') {
-          existing.title = canonicalTitle;
-        }
+        // canonical title ALWAYS wins presentation metadata (including the
+        // literal default "New Conversation" — it is a legitimate canonical title).
+        existing.title = canonicalTitle;
         existing.updated_at = nowIso();
         projected.push(existing);
       } else {

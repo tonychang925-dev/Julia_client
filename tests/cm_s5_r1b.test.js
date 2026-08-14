@@ -10,7 +10,7 @@ const os = require('os');
 const path = require('path');
 
 const { ConversationStore } = require('../src/main/conversation-store.js');
-const { listConversationsViaCore } = require('../src/main/text-client.js');
+const { listConversationsViaCore, ensureConversationMessages } = require('../src/main/text-client.js');
 
 function tmpDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'cm5-r1b-'));
@@ -109,6 +109,63 @@ function test_project_canonical_list_preserves_current() {
   assert.strictEqual(store.getCurrentConversation().conversation_id, 'conv_X');
 }
 
+// AT-ELEC-R1B-05B: literal "New Conversation" canonical title still wins
+function test_project_canonical_list_new_conversation_title_wins() {
+  const store = new ConversationStore(tmpDir());
+  store.createConversationWithId('conv_A', 'OLD LOCAL TITLE');
+  const result = store.projectCanonicalList([
+    { conversation_id: 'conv_A', title: 'New Conversation' },
+  ]);
+  assert.strictEqual(result[0].title, 'New Conversation');
+  assert.strictEqual(store.getConversation('conv_A').title, 'New Conversation');
+}
+
+// AT-ELEC-R1B-07: valid canonical, local absent → GET, projection created, reconciled, selected, zero POST
+async function test_open_valid_absent_local_reconciles_no_post() {
+  const calls = [];
+  const restore = stubFetch(async (url, opts) => {
+    calls.push({ url: String(url), method: opts?.method });
+    if (String(url).includes('/messages')) {
+      return jsonResponse(200, {
+        conversation_id: 'conv_A',
+        title: 'A',
+        messages: [{ message_id: 'm1', turn_id: 't1', role: 'user', content: 'hi', status: 'completed' }],
+      });
+    }
+    return jsonResponse(200, { conversation_id: 'conv_A', title: 'A' });
+  });
+  try {
+    const canonical = await ensureConversationMessages('conv_A');
+    assert.ok(calls.every((c) => c.method !== 'POST'), 'open must not POST create');
+
+    const store = new ConversationStore(tmpDir());
+    store.reconcileCanonicalMessages('conv_A', canonical);
+    assert.ok(store.getConversation('conv_A') !== null);
+    assert.strictEqual(store.getCurrentConversation().conversation_id, 'conv_A');
+    assert.strictEqual(store.getConversation('conv_A').messages.length, 1);
+  } finally {
+    restore();
+  }
+}
+
+// AT-ELEC-R1B-08: unknown canonical → 404, zero POST, no projection mutation
+async function test_open_unknown_404_no_mutation() {
+  const calls = [];
+  const restore = stubFetch(async (url, opts) => {
+    calls.push({ url: String(url), method: opts?.method });
+    return jsonResponse(404, {});
+  });
+  try {
+    await assert.rejects(() => ensureConversationMessages('unknown_id'), /HTTP 404/);
+    assert.ok(calls.every((c) => c.method !== 'POST'), 'unknown must not POST');
+  } finally {
+    restore();
+  }
+  const store = new ConversationStore(tmpDir());
+  assert.strictEqual(store.getConversation('unknown_id'), null);
+  assert.strictEqual(store.getCurrentConversation(), null);
+}
+
 (async () => {
   const tests = [
     test_project_does_not_change_current,
@@ -117,6 +174,9 @@ function test_project_canonical_list_preserves_current() {
     test_project_canonical_list_excludes_residue,
     test_project_canonical_list_refreshes_title,
     test_project_canonical_list_preserves_current,
+    test_project_canonical_list_new_conversation_title_wins,
+    test_open_valid_absent_local_reconciles_no_post,
+    test_open_unknown_404_no_mutation,
   ];
   let failed = 0;
   for (const t of tests) {
