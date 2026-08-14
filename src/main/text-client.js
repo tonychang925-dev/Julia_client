@@ -314,6 +314,27 @@ async function listConversationsViaCore(options = {}) {
   return data;
 }
 
+async function renameConversationViaCore(conversationId, title, options = {}) {
+  const id = String(conversationId || '').trim();
+  if (!id) throw new Error('Conversation ID is required');
+  const url = buildConversationDetailApiUrl(options.brainEndpoint, id);
+  const response = await fetch(url, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: JSON.stringify({ title }),
+  });
+  if (!response.ok) {
+    const body = await response.text().catch(() => '');
+    throw new Error(`Core rename failed: HTTP ${response.status}${body ? ` ${body.slice(0, 200)}` : ''}`);
+  }
+  const data = await response.json();
+  const returnedId = String(data?.conversation_id || '').trim();
+  if (returnedId && returnedId !== id) {
+    throw new Error('Core rename response referenced another conversation');
+  }
+  return { ...data, conversation_id: id };
+}
+
 module.exports = {
   DEFAULT_BRAIN_ENDPOINT,
   buildConversationMessagesApiUrl,
@@ -327,6 +348,7 @@ module.exports = {
   ensureConversationMessages,
   createConversationViaCore,
   listConversationsViaCore,
+  renameConversationViaCore,
   commitExternalTurns,
   getTextApiUrl,
   normalizeTurnRequest,

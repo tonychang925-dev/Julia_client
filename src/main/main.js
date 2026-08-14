@@ -9,6 +9,7 @@ const {
   ensureConversationMessages,
   createConversationViaCore,
   listConversationsViaCore,
+  renameConversationViaCore,
   commitExternalTurns,
   getConversationTurnApiTemplate,
 } = require('./text-client');
@@ -309,7 +310,14 @@ ipcMain.handle('julia:conversation:add-message', async (_event, input) => {
 });
 
 ipcMain.handle('julia:conversation:rename', async (_event, input) => {
-  return getConversationStore().renameConversation(input?.conversationId, input?.title);
+  const conversationId = String(input?.conversationId || '').trim();
+  if (!conversationId) throw new Error('Conversation ID is required');
+  // CM-S5-R1D: rename = canonical metadata mutation via Brain PATCH.
+  // No local fake title on failure; id/transcript unchanged.
+  const canonical = await renameConversationViaCore(conversationId, input?.title || '', getTextClientOptions());
+  const store = getConversationStore();
+  store.projectCanonicalList([canonical]);
+  return store.getConversation(conversationId);
 });
 
 ipcMain.handle('julia:conversation:delete', async (_event, input) => {
