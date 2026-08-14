@@ -271,13 +271,9 @@ ipcMain.handle('julia:text:stream', async (event, input) => {
 });
 
 ipcMain.handle('julia:conversation:list', async () => {
-  // CM-S5-R1B: list = project canonical Brain list (never local fabrication).
+  // CM-S5-R1B.1: Brain list is the sole visible membership authority.
   const canonical = await listConversationsViaCore(getTextClientOptions());
-  const store = getConversationStore();
-  for (const conv of canonical) {
-    store.projectConversation(conv.conversation_id, conv.title || 'New Conversation');
-  }
-  return store.listConversations();
+  return getConversationStore().projectCanonicalList(canonical);
 });
 
 ipcMain.handle('julia:conversation:current', async () => {

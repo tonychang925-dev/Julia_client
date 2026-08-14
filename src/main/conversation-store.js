@@ -193,6 +193,51 @@ class ConversationStore {
     return conversation;
   }
 
+  projectCanonicalList(canonicalList) {
+    // CM-S5-R1B.1: Brain list is the sole visible list-membership authority.
+    // Upsert/refresh projections; return ONLY projections in this exact
+    // canonical result set. Local residue stays cached but has zero list
+    // authority (absence controls presentation, never local deletion).
+    this.load();
+    const projected = [];
+    const seen = new Set();
+    for (const conv of canonicalList) {
+      const id = String(conv?.conversation_id || '').trim();
+      if (!id) continue;
+      seen.add(id);
+      const canonicalTitle = typeof conv?.title === 'string' && conv.title.trim()
+        ? conv.title.trim()
+        : 'New Conversation';
+      const existing = this.getConversation(id);
+      if (existing) {
+        // canonical title refreshes presentation metadata
+        if (canonicalTitle !== 'New Conversation') {
+          existing.title = canonicalTitle;
+        }
+        existing.updated_at = nowIso();
+        projected.push(existing);
+      } else {
+        const timestamp = nowIso();
+        const conversation = {
+          conversation_id: id,
+          title: deriveTitle(canonicalTitle),
+          title_updated_by_user: false,
+          created_at: timestamp,
+          updated_at: timestamp,
+          projection: normalizeProjectionMetadata(),
+          messages: [],
+        };
+        this.state.conversations.unshift(conversation);
+        projected.push(conversation);
+      }
+    }
+    this.save();
+    // Return ONLY the canonical result set (residue not in `seen` is hidden).
+    return projected
+      .sort((a, b) => String(b.updated_at).localeCompare(String(a.updated_at)))
+      .map((conversation) => summarizeConversation(conversation));
+  }
+
   renameConversation(conversationId, title) {
     this.load();
     const conversation = this.getConversation(conversationId);

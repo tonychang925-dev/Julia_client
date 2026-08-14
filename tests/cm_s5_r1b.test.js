@@ -67,11 +67,56 @@ async function test_list_returns_canonical_array() {
   }
 }
 
+// AT-ELEC-R1B-04: canonical list excludes local residue (GHOST cached but hidden)
+function test_project_canonical_list_excludes_residue() {
+  const store = new ConversationStore(tmpDir());
+  store.createConversationWithId('conv_A', 'A');
+  store.createConversationWithId('conv_B', 'B');
+  store.createConversationWithId('conv_GHOST', 'GHOST');
+
+  const result = store.projectCanonicalList([
+    { conversation_id: 'conv_A', title: 'A' },
+    { conversation_id: 'conv_B', title: 'B' },
+  ]);
+  assert.deepStrictEqual(
+    result.map((c) => c.conversation_id).sort(),
+    ['conv_A', 'conv_B']
+  );
+  // residue remains cached, just has zero list authority
+  assert.ok(store.getConversation('conv_GHOST') !== null);
+}
+
+// AT-ELEC-R1B-05: canonical title refreshes presentation metadata
+function test_project_canonical_list_refreshes_title() {
+  const store = new ConversationStore(tmpDir());
+  store.createConversationWithId('conv_A', 'OLD');
+  const result = store.projectCanonicalList([
+    { conversation_id: 'conv_A', title: 'CANONICAL' },
+  ]);
+  assert.strictEqual(result[0].title, 'CANONICAL');
+  assert.strictEqual(store.getConversation('conv_A').title, 'CANONICAL');
+}
+
+// AT-ELEC-R1B-06: list must not change current selection
+function test_project_canonical_list_preserves_current() {
+  const store = new ConversationStore(tmpDir());
+  store.createConversationWithId('conv_X', 'X');
+  store.setCurrentConversation('conv_X');
+  store.projectCanonicalList([
+    { conversation_id: 'conv_A', title: 'A' },
+    { conversation_id: 'conv_B', title: 'B' },
+  ]);
+  assert.strictEqual(store.getCurrentConversation().conversation_id, 'conv_X');
+}
+
 (async () => {
   const tests = [
     test_project_does_not_change_current,
     test_project_requires_canonical_id,
     test_list_returns_canonical_array,
+    test_project_canonical_list_excludes_residue,
+    test_project_canonical_list_refreshes_title,
+    test_project_canonical_list_preserves_current,
   ];
   let failed = 0;
   for (const t of tests) {
