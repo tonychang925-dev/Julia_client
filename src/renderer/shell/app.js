@@ -320,6 +320,11 @@ async function sendVoiceWorkspaceRequest(type, payload = {}, timeoutMs = 20000) 
 async function bindVoiceConversation(conversationId = activeConversationId) {
   const targetId = String(conversationId || '').trim();
   if (!targetId) throw new Error('No active conversation for Voice');
+  // CM-S5-R1C.1: attach target MUST equal the active canonical conversation.
+  // No stale-active attach, no reuse fast-path bypassing this invariant.
+  if (targetId !== activeConversationId) {
+    throw new Error('Voice attach target is not the active canonical conversation');
+  }
   if (boundVoiceConversationId === targetId && voiceWorkspaceSessionId) return { conversationId: targetId, reused: true };
   await syncCanonicalConversation(targetId, 'voice-bind');
   const synced = await textClient.syncConversationMessages(targetId);
@@ -353,26 +358,18 @@ async function flushVoiceWorkspace(reason = 'text') {
   if (delta.conversationId !== conversationId || delta.voiceSessionId !== voiceWorkspaceSessionId) {
     throw new Error('Voice workspace delta identity mismatch');
   }
-  const turns = Array.isArray(delta.turns) ? delta.turns : [];
-  if (turns.length) {
-    await textClient.commitExternalTurns({
-      conversationId,
-      voiceSessionId: delta.voiceSessionId,
-      baseLastMessageId: delta.baseLastMessageId || '',
-      turns,
-    });
-  }
+  // CM-S5-R1C.1 / CC-1: Voice turns flow S2S → Brain → ConversationRuntime.
+  // Electron MUST NOT commit external turns. Flush is media/session settlement
+  // only; canonical projection is reconciled from Brain below.
   voiceFrame.contentWindow.postMessage({
     source: 'julia-electron-v2',
-    type: 'julia.voice.workspace.committed',
+    type: 'julia.voice.workspace.released',
     conversationId,
     voiceSessionId: delta.voiceSessionId,
-    committedTurnIds: turns.map(t => t.turn_id),
-    baseLastMessageId: delta.baseLastMessageId || '',
   }, getVoiceTargetOrigin());
   await syncCanonicalConversation(conversationId, `voice-flush:${reason}`);
   setVoiceLifecycleStatus('Voice conversation saved. Microphone is off.', 'idle');
-  return { empty: turns.length === 0 };
+  return { empty: true };
 }
 
 function isPauseConfirmed(result) {

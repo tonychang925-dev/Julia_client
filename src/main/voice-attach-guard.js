@@ -25,4 +25,17 @@ function verifyVoiceBootstrapAck(targetId, ackConversationId) {
   return { ok: true };
 }
 
-module.exports = { verifyVoiceAttachEligibility, verifyVoiceBootstrapAck };
+function verifyActiveEquality(targetId, activeId) {
+  const id = String(targetId || '').trim();
+  if (!id) return { ok: false, reason: 'missing-canonical-id' };
+  if (String(activeId || '').trim() !== id) {
+    return { ok: false, reason: 'not-active-conversation' };
+  }
+  return { ok: true };
+}
+
+module.exports = {
+  verifyVoiceAttachEligibility,
+  verifyVoiceBootstrapAck,
+  verifyActiveEquality,
+};

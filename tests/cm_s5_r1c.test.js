@@ -6,9 +6,13 @@
  */
 const assert = require('assert');
 
+const fs = require('fs');
+const path = require('path');
+
 const {
   verifyVoiceAttachEligibility,
   verifyVoiceBootstrapAck,
+  verifyActiveEquality,
 } = require('../src/main/voice-attach-guard.js');
 
 function test_attach_requires_proven_canonical_id() {
@@ -33,10 +37,27 @@ function test_bootstrap_ack_must_match() {
   assert.strictEqual(verifyVoiceBootstrapAck('conv_A', '').ok, false);
 }
 
+// AT-ELEC-R1C-04/05: active-id equality — stale attach blocked, reuse cannot bypass
+function test_active_equality_blocks_stale_attach() {
+  assert.strictEqual(verifyActiveEquality('conv_A', 'conv_B').ok, false);
+  assert.strictEqual(verifyActiveEquality('conv_A', '').ok, false);
+  assert.strictEqual(verifyActiveEquality('conv_A', 'conv_A').ok, true);
+}
+
+// AT-ELEC-R1C-06: switch path must NOT call commitExternalTurns (CC-1)
+function test_switch_path_no_commit_external_turns() {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'renderer', 'shell', 'app.js'), 'utf8');
+  // flushVoiceWorkspace (switch settlement) must not commit external turns
+  assert.ok(!src.includes('commitExternalTurns('), 'switch must not commit external turns');
+  assert.ok(src.includes('julia.voice.workspace.released'), 'switch should release, not commit');
+}
+
 const tests = [
   test_attach_requires_proven_canonical_id,
   test_attach_no_stale_or_fabricated_id,
   test_bootstrap_ack_must_match,
+  test_active_equality_blocks_stale_attach,
+  test_switch_path_no_commit_external_turns,
 ];
 
 let failed = 0;
