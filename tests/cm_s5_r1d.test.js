@@ -82,12 +82,58 @@ function test_rename_handler_uses_canonical_patch() {
   );
 }
 
+// R1D-05: 200 {} → reject (Electron must not inject missing id), projection unchanged
+async function test_rename_missing_id_rejects_projection_unchanged() {
+  const store = new ConversationStore(tmpDir());
+  store.createConversationWithId('conv_A', 'OLD');
+
+  const restore = stubFetch(async () => jsonResponse(200, {}));
+  try {
+    await assert.rejects(
+      () => renameConversationViaCore('conv_A', 'NEW'),
+      /did not contain canonical conversation_id/
+    );
+  } finally {
+    restore();
+  }
+  assert.strictEqual(store.getConversation('conv_A').title, 'OLD');
+}
+
+// R1D-05B: 200 {"conversation_id":"","title":"NEW"} → reject
+async function test_rename_empty_id_rejects() {
+  const restore = stubFetch(async () => jsonResponse(200, { conversation_id: '', title: 'NEW' }));
+  try {
+    await assert.rejects(
+      () => renameConversationViaCore('conv_A', 'NEW'),
+      /did not contain canonical conversation_id/
+    );
+  } finally {
+    restore();
+  }
+}
+
+// R1D-05C: 200 {"conversation_id":"conv_A"} (missing title) → reject
+async function test_rename_missing_title_rejects() {
+  const restore = stubFetch(async () => jsonResponse(200, { conversation_id: 'conv_A' }));
+  try {
+    await assert.rejects(
+      () => renameConversationViaCore('conv_A', 'NEW'),
+      /did not contain canonical title/
+    );
+  } finally {
+    restore();
+  }
+}
+
 (async () => {
   const tests = [
     test_rename_returns_canonical_title,
     test_rename_failure_no_local_fake_title,
     test_rename_unknown_404,
     test_rename_handler_uses_canonical_patch,
+    test_rename_missing_id_rejects_projection_unchanged,
+    test_rename_empty_id_rejects,
+    test_rename_missing_title_rejects,
   ];
   let failed = 0;
   for (const t of tests) {

@@ -328,11 +328,19 @@ async function renameConversationViaCore(conversationId, title, options = {}) {
     throw new Error(`Core rename failed: HTTP ${response.status}${body ? ` ${body.slice(0, 200)}` : ''}`);
   }
   const data = await response.json();
+  // CM-S5-R1D.1: success DTO must carry full canonical identity proof.
+  // Electron MUST NOT inject a missing conversation_id or synthesize a title.
   const returnedId = String(data?.conversation_id || '').trim();
-  if (returnedId && returnedId !== id) {
+  if (!returnedId) {
+    throw new Error('Core rename response did not contain canonical conversation_id');
+  }
+  if (returnedId !== id) {
     throw new Error('Core rename response referenced another conversation');
   }
-  return { ...data, conversation_id: id };
+  if (typeof data?.title !== 'string') {
+    throw new Error('Core rename response did not contain canonical title');
+  }
+  return { ...data, conversation_id: returnedId };
 }
 
 module.exports = {
