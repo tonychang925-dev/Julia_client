@@ -386,6 +386,170 @@ test('AT10-REMED-TC04 Electron product handlers are not backed by local cache tr
   assert.doesNotMatch(mainSource, /V2_CREATE_CORE_FAILED[\s\S]*?createConversation\(title\)/);
 });
 
+
+test('AT10-R1-001 cache deletion recovery rebuilds projection from Core canonical history', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'julia-client-at10-r1-delete-'));
+  try {
+    const store = new ConversationStore(dir);
+    store.load();
+    const local = store.createConversation('Poisoned local projection');
+    store.addMessage(local.conversation_id, {
+      message_id: 'local-poison', turn_id: 'local-turn', role: 'user', modality: 'text',
+      content: 'LOCAL_ONLY_POISON_AFTER_CACHE_DELETE', status: 'pending',
+      metadata: { source: 'julia-electron-local', projection_state: 'local_pending' },
+    });
+
+    const cleared = store.clearLocalCache();
+    assert.equal(cleared.cache.conversation_count, 0);
+    assert.equal(cleared.cache.message_count, 0);
+    assert.equal(store.getCachedCurrentConversation(), null);
+
+    const recovered = store.reconcileCanonicalMessages('core-r1-delete', {
+      title: 'Core restored conversation',
+      messages: [
+        { message_id: 'core-r1-m1', conversation_id: 'core-r1-delete', turn_id: 'core-r1-t1', role: 'user', modality: 'text', content: 'Core message A', status: 'completed', created_at: '2026-08-23T01:00:00Z' },
+        { message_id: 'core-r1-m2', conversation_id: 'core-r1-delete', turn_id: 'core-r1-t1', role: 'assistant', modality: 'text', content: 'Core message B', status: 'completed', created_at: '2026-08-23T01:00:01Z' },
+      ],
+    });
+
+    assert.deepEqual(recovered.conversation.messages.map((m) => m.message_id), ['core-r1-m1', 'core-r1-m2']);
+    assert.equal(recovered.conversation.messages.some((m) => m.content.includes('LOCAL_ONLY_POISON')), false);
+    assert.equal(recovered.conversation.messages.every((m) => m.metadata.source === 'julia-core-canonical'), true);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('AT10-R1-002 client-only transcript sabotage never enters provider turn body or canonical projection', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'julia-client-at10-r1-fake-'));
+  const observed = [];
+  const server = http.createServer((request, response) => {
+    let body = '';
+    request.setEncoding('utf8');
+    request.on('data', (chunk) => { body += chunk; });
+    request.on('end', () => {
+      observed.push({ method: request.method, url: request.url, body: body ? JSON.parse(body) : null });
+      response.writeHead(200, { 'Content-Type': 'application/json' });
+      response.end(JSON.stringify({ conversation_id: 'core-r1-fake', turn_id: 'turn-real', content: 'canonical answer', status: 'completed' }));
+    });
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  try {
+    const store = new ConversationStore(dir);
+    store.load();
+    const local = store.createConversationWithId('core-r1-fake', 'Fake local transcript');
+    store.addMessage(local.conversation_id, {
+      message_id: 'fake-client-message', turn_id: 'fake-turn', role: 'user', modality: 'text',
+      content: 'FAKE_CLIENT_MESSAGE', status: 'pending',
+      metadata: { source: 'julia-electron-local', projection_state: 'sabotage' },
+    });
+
+    const result = await sendTextMessage({
+      conversationId: 'core-r1-fake', turnId: 'turn-real', modality: 'text', input: 'real input only',
+    }, { brainEndpoint: `http://127.0.0.1:${server.address().port}` });
+    assert.equal(result.content, 'canonical answer');
+    assert.deepEqual(observed[0].body, { turn_id: 'turn-real', modality: 'text', input: 'real input only', stream: false });
+    assert.equal(JSON.stringify(observed[0].body).includes('FAKE_CLIENT_MESSAGE'), false);
+
+    const reconciled = store.reconcileCanonicalMessages('core-r1-fake', { messages: [] });
+    assert.equal(reconciled.conversation.messages.some((m) => m.content === 'FAKE_CLIENT_MESSAGE'), false);
+    assert.equal(reconciled.reconciliation.removed_local, 1);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('AT10-R1-003 client-generated id sabotage is not promoted into Core canonical existence', async () => {
+  const requests = [];
+  const server = http.createServer((request, response) => {
+    requests.push(`${request.method} ${request.url}`);
+    if (request.method === 'GET' && request.url === '/internal/v1/conversations/conv_fake_001') {
+      response.writeHead(404, { 'Content-Type': 'application/json' });
+      response.end(JSON.stringify({ error: 'not_found' }));
+      return;
+    }
+    if (request.method === 'POST' && request.url === '/internal/v1/conversations') {
+      response.writeHead(500, { 'Content-Type': 'application/json' });
+      response.end(JSON.stringify({ error: 'POST must not be reached for client id sabotage' }));
+      return;
+    }
+    response.writeHead(500); response.end();
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  try {
+    await assert.rejects(
+      () => ensureConversationMessages('conv_fake_001', 'client fake', { brainEndpoint: `http://127.0.0.1:${server.address().port}` }),
+      (error) => error.status === 404 && error.code === 'CORE_CONVERSATION_NOT_FOUND'
+    );
+    assert.deepEqual(requests, ['GET /internal/v1/conversations/conv_fake_001']);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test('AT10-R1-004 stale cache after Core mutation is replaced by Core canonical state', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'julia-client-at10-r1-stale-'));
+  try {
+    const store = new ConversationStore(dir);
+    store.load();
+    const conversation = store.createConversationWithId('core-r1-stale', 'Stale projection');
+    store.addMessage(conversation.conversation_id, {
+      message_id: 'core-old-a', turn_id: 'turn-a', role: 'user', modality: 'text',
+      content: 'message A old cached copy', status: 'completed',
+      metadata: { source: 'julia-core-canonical' }, created_at: '2026-08-23T02:00:00Z',
+    });
+    store.markConversationStale(conversation.conversation_id, 'Core changed while client offline');
+
+    const reconciled = store.reconcileCanonicalMessages(conversation.conversation_id, {
+      title: 'Core mutated truth',
+      messages: [
+        { message_id: 'core-new-a', conversation_id: 'core-r1-stale', turn_id: 'turn-a', role: 'user', modality: 'text', content: 'message A canonical mutation', status: 'completed', created_at: '2026-08-23T02:00:00Z' },
+        { message_id: 'core-new-b', conversation_id: 'core-r1-stale', turn_id: 'turn-b', role: 'assistant', modality: 'text', content: 'message B canonical addition', status: 'completed', created_at: '2026-08-23T02:00:01Z' },
+      ],
+    });
+
+    assert.equal(reconciled.conversation.projection.stale, false);
+    assert.deepEqual(reconciled.conversation.messages.map((m) => m.message_id), ['core-new-a', 'core-new-b']);
+    assert.deepEqual(reconciled.conversation.messages.map((m) => m.content), ['message A canonical mutation', 'message B canonical addition']);
+    assert.equal(reconciled.conversation.messages.some((m) => m.content.includes('old cached copy')), false);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('AT10-R1-005 Core unavailable fails closed and keeps cache labeled as stale projection', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'julia-client-at10-r1-unavailable-'));
+  const server = http.createServer((_request, response) => {
+    response.writeHead(503, { 'Content-Type': 'application/json' });
+    response.end(JSON.stringify({ error: 'core_unavailable' }));
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  try {
+    const store = new ConversationStore(dir);
+    store.load();
+    const cached = store.createConversationWithId('core-r1-unavailable', 'Cached only while Core down');
+    store.addMessage(cached.conversation_id, {
+      message_id: 'cached-only', turn_id: 'cached-turn', role: 'user', modality: 'text',
+      content: 'CACHED_ONLY_WHILE_CORE_DOWN', status: 'completed',
+      metadata: { source: 'julia-core-canonical' },
+    });
+
+    await assert.rejects(
+      () => listConversationsViaCore({ brainEndpoint: `http://127.0.0.1:${server.address().port}` }),
+      (error) => error.status === 503
+    );
+    const stale = store.markConversationStale('core-r1-unavailable', 'Core unavailable');
+    assert.equal(stale.projection.stale, true);
+    assert.equal(stale.projection.authority, 'disposable_projection');
+    assert.equal(store.getCacheStatus().authority, 'non_canonical');
+    assert.equal(store.getCacheStatus().stale_conversation_count, 1);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('E4-AT03/E4-AT12 local cache clear is disposable and never uploads history', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'julia-client-e4-clear-'));
   try {
