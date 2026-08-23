@@ -13,6 +13,7 @@ const {
   ensureConversationMessages,
   buildTurnBody,
   getConversationMessages,
+  listConversationsViaCore,
   getConversationTurnApiTemplate,
   normalizeTurnRequest,
   parseOpenAiSseChunk,
@@ -309,30 +310,18 @@ test('CC-1-TC02 external-turns endpoint is not constructed by Electron client', 
   assert.equal(Object.prototype.hasOwnProperty.call(require('../src/main/text-client'), 'buildExternalTurnsApiUrl'), false);
 });
 
-test('CC-1-TC03 registers a local-only conversation before Voice bind', async () => {
-  let exists = false;
+test('AT10-REMED-TC01 local-only conversation id is not promoted to Core existence', async () => {
   const requests = [];
   const server = http.createServer((request, response) => {
     requests.push(`${request.method} ${request.url}`);
     if (request.method === 'GET' && request.url === '/internal/v1/conversations/conv-local') {
-      response.writeHead(exists ? 200 : 404, { 'Content-Type': 'application/json' });
-      response.end(JSON.stringify(exists ? { conversation_id: 'conv-local' } : { error: 'not_found' }));
+      response.writeHead(404, { 'Content-Type': 'application/json' });
+      response.end(JSON.stringify({ error: 'not_found' }));
       return;
     }
     if (request.method === 'POST' && request.url === '/internal/v1/conversations') {
-      let body = '';
-      request.on('data', (chunk) => { body += chunk; });
-      request.on('end', () => {
-        assert.deepEqual(JSON.parse(body), { conversation_id: 'conv-local', title: 'Local draft' });
-        exists = true;
-        response.writeHead(200, { 'Content-Type': 'application/json' });
-        response.end(JSON.stringify({ conversation_id: 'conv-local' }));
-      });
-      return;
-    }
-    if (request.method === 'GET' && request.url === '/internal/v1/conversations/conv-local/messages') {
-      response.writeHead(200, { 'Content-Type': 'application/json' });
-      response.end(JSON.stringify({ conversation_id: 'conv-local', title: 'Local draft', messages: [] }));
+      response.writeHead(500, { 'Content-Type': 'application/json' });
+      response.end(JSON.stringify({ error: 'client identity promotion forbidden' }));
       return;
     }
     response.writeHead(500); response.end();
@@ -344,18 +333,58 @@ test('CC-1-TC03 registers a local-only conversation before Voice bind', async ()
       buildConversationDetailApiUrl(endpoint, 'conv-local'),
       `${endpoint}/internal/v1/conversations/conv-local`
     );
-    const result = await ensureConversationMessages('conv-local', 'Local draft', { brainEndpoint: endpoint });
-    assert.equal(result.conversation_id, 'conv-local');
-    assert.deepEqual(requests, [
-      'GET /internal/v1/conversations/conv-local',
-      'POST /internal/v1/conversations',
-      'GET /internal/v1/conversations/conv-local/messages',
-    ]);
+    await assert.rejects(
+      () => ensureConversationMessages('conv-local', 'Local draft', { brainEndpoint: endpoint }),
+      (error) => error.status === 404 && error.code === 'CORE_CONVERSATION_NOT_FOUND'
+    );
+    assert.deepEqual(requests, ['GET /internal/v1/conversations/conv-local']);
   } finally {
     await new Promise((resolve) => server.close(resolve));
   }
 });
 
+
+test('AT10-REMED-TC02 Core conversation list is the reload source after local cache destruction', async () => {
+  const server = http.createServer((request, response) => {
+    if (request.method === 'GET' && request.url === '/internal/v1/conversations') {
+      response.writeHead(200, { 'Content-Type': 'application/json' });
+      response.end(JSON.stringify([
+        { conversation_id: 'core-conv-a', title: 'Core A', message_count: 2 },
+        { conversation_id: 'core-conv-b', title: 'Core B', message_count: 1 },
+      ]));
+      return;
+    }
+    response.writeHead(500); response.end();
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  try {
+    const conversations = await listConversationsViaCore({ brainEndpoint: `http://127.0.0.1:${server.address().port}` });
+    assert.deepEqual(conversations.map((item) => item.conversation_id), ['core-conv-a', 'core-conv-b']);
+    assert.equal(conversations[0].projection.authority, 'core_canonical_projection');
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test('AT10-REMED-TC03 empty cache lookup does not create a local conversation implicitly', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'julia-client-at10-empty-'));
+  try {
+    const store = new ConversationStore(dir);
+    store.load();
+    assert.equal(store.getCachedCurrentConversation(), null);
+    assert.equal(store.getCacheStatus().conversation_count, 0);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('AT10-REMED-TC04 Electron product handlers are not backed by local cache truth', () => {
+  const mainSource = fs.readFileSync(path.join(__dirname, '..', 'src', 'main', 'main.js'), 'utf8');
+  assert.match(mainSource, /ipcMain\.handle\('julia:conversation:list'[\s\S]*?listCoreConversationProjection\(\)/);
+  assert.match(mainSource, /ipcMain\.handle\('julia:conversation:current'[\s\S]*?getCurrentCoreConversationProjection\(\)/);
+  assert.match(mainSource, /ipcMain\.handle\('julia:conversation:search'[\s\S]*?listCoreConversationProjection\(input\?\.query\)/);
+  assert.doesNotMatch(mainSource, /V2_CREATE_CORE_FAILED[\s\S]*?createConversation\(title\)/);
+});
 
 test('E4-AT03/E4-AT12 local cache clear is disposable and never uploads history', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'julia-client-e4-clear-'));

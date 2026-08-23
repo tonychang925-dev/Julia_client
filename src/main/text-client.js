@@ -128,22 +128,49 @@ async function getConversationMessages(conversationId, options = {}) {
   };
 }
 
-async function ensureConversationMessages(conversationId, title = 'New Conversation', options = {}) {
+async function ensureConversationMessages(conversationId, _title = 'New Conversation', options = {}) {
   try {
     await getConversationDetail(conversationId, options);
   } catch (error) {
-    if (error.status !== 404) throw error;
-    const response = await fetch(buildConversationsApiUrl(options.brainEndpoint), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-      body: JSON.stringify({ conversation_id: conversationId, title }),
-    });
-    if (!response.ok && response.status !== 409) {
-      const body = await response.text().catch(() => '');
-      throw new Error(`Julia conversation create failed: HTTP ${response.status}${body ? ` ${body.slice(0, 240)}` : ''}`);
+    if (error.status === 404) {
+      const notFound = new Error(`Core conversation not found: ${conversationId}`);
+      notFound.status = 404;
+      notFound.code = 'CORE_CONVERSATION_NOT_FOUND';
+      throw notFound;
     }
+    throw error;
   }
   return getConversationMessages(conversationId, options);
+}
+
+async function listConversationsViaCore(options = {}) {
+  const response = await fetch(buildConversationsApiUrl(options.brainEndpoint), {
+    method: 'GET',
+    headers: { Accept: 'application/json' },
+  });
+  if (!response.ok) {
+    const body = await response.text().catch(() => '');
+    const error = new Error(`Julia conversation list failed: HTTP ${response.status}${body ? ` ${body.slice(0, 240)}` : ''}`);
+    error.status = response.status;
+    throw error;
+  }
+
+  const data = await response.json();
+  const raw = Array.isArray(data) ? data : (Array.isArray(data?.conversations) ? data.conversations : data?.data);
+  if (!Array.isArray(raw)) throw new Error('Julia conversation list response did not contain conversations');
+
+  return raw.map((item) => {
+    const conversationId = String(item?.conversation_id || item?.id || '').trim();
+    if (!conversationId) return null;
+    return {
+      conversation_id: conversationId,
+      title: typeof item.title === 'string' && item.title.trim() ? item.title : 'New Conversation',
+      created_at: item.created_at || item.createdAt || null,
+      updated_at: item.updated_at || item.updatedAt || item.last_message_at || null,
+      message_count: Number.isFinite(Number(item.message_count)) ? Number(item.message_count) : undefined,
+      projection: { source: 'julia-core-canonical', authority: 'core_canonical_projection', stale: false },
+    };
+  }).filter(Boolean);
 }
 
 async function commitExternalTurns() {
@@ -313,6 +340,7 @@ module.exports = {
   getConversationMessages,
   getConversationDetail,
   ensureConversationMessages,
+  listConversationsViaCore,
   createConversationViaCore,
   commitExternalTurns,
   getTextApiUrl,

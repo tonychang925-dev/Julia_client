@@ -298,7 +298,7 @@ class ConversationStore {
     return this.state.conversations.find((item) => item.conversation_id === conversationId) || null;
   }
 
-  getCurrentConversation() {
+  getCachedCurrentConversation() {
     this.load();
     if (this.state.currentConversationId) {
       const current = this.getConversation(this.state.currentConversationId);
@@ -306,9 +306,18 @@ class ConversationStore {
     }
 
     if (this.state.conversations.length > 0) {
-      this.state.currentConversationId = this.state.conversations[0].conversation_id;
-      this.save();
       return this.state.conversations[0];
+    }
+
+    return null;
+  }
+
+  getCurrentConversation() {
+    const cached = this.getCachedCurrentConversation();
+    if (cached) {
+      this.state.currentConversationId = cached.conversation_id;
+      this.save();
+      return cached;
     }
 
     return this.createConversation('New Conversation');
