@@ -380,10 +380,12 @@ test('AT10-REMED-TC03 empty cache lookup does not create a local conversation im
 
 test('AT10-REMED-TC04 Electron product handlers are not backed by local cache truth', () => {
   const mainSource = fs.readFileSync(path.join(__dirname, '..', 'src', 'main', 'main.js'), 'utf8');
-  assert.match(mainSource, /ipcMain\.handle\('julia:conversation:list'[\s\S]*?listCoreConversationProjection\(\)/);
-  assert.match(mainSource, /ipcMain\.handle\('julia:conversation:current'[\s\S]*?getCurrentCoreConversationProjection\(\)/);
-  assert.match(mainSource, /ipcMain\.handle\('julia:conversation:search'[\s\S]*?listCoreConversationProjection\(input\?\.query\)/);
-  assert.doesNotMatch(mainSource, /V2_CREATE_CORE_FAILED[\s\S]*?createConversation\(title\)/);
+  const handlerSource = fs.readFileSync(path.join(__dirname, '..', 'src', 'main', 'conversation-ipc-handlers.js'), 'utf8');
+  assert.match(mainSource, /registerConversationIpcHandlers\(ipcMain, \{/);
+  assert.match(handlerSource, /'julia:conversation:list'[\s\S]*?listCoreConversationProjection\(\)/);
+  assert.match(handlerSource, /'julia:conversation:current'[\s\S]*?getCurrentCoreConversationProjection\(\)/);
+  assert.match(handlerSource, /'julia:conversation:search'[\s\S]*?listCoreConversationProjection\(input\?\.query\)/);
+  assert.doesNotMatch(handlerSource, /V2_CREATE_CORE_FAILED[\s\S]*?createConversation\(title\)/);
 });
 
 

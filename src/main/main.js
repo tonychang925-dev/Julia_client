@@ -5,16 +5,12 @@ const { createMainWindow } = require('./window');
 const {
   sendTextMessage,
   streamTextMessage,
-  getConversationMessages,
-  ensureConversationMessages,
-  listConversationsViaCore,
-  createConversationViaCore,
-  commitExternalTurns,
   getConversationTurnApiTemplate,
 } = require('./text-client');
 const { createConversationStore } = require('./conversation-store');
 const { createSettingsStore } = require('./settings-store');
 const { getBrainStatus } = require('./brain-status');
+const { registerConversationIpcHandlers } = require('./conversation-ipc-handlers');
 
 let mainWindow = null;
 let conversationStore = null;
@@ -48,68 +44,6 @@ function getTextClientOptions() {
   };
 }
 
-
-function cacheCoreConversationSummaries(items = []) {
-  const store = getConversationStore();
-  return items.map((item) => store.createConversationWithId(
-    item.conversation_id,
-    item.title || 'New Conversation'
-  ));
-}
-
-async function listCoreConversationProjection(query = '') {
-  const items = await listConversationsViaCore(getTextClientOptions());
-  cacheCoreConversationSummaries(items);
-  const needle = String(query || '').trim().toLowerCase();
-  if (!needle) return items;
-
-  const matched = [];
-  for (const item of items) {
-    const title = String(item.title || '').toLowerCase();
-    if (title.includes(needle)) {
-      matched.push({ ...item, match_count: 1, match_snippet: item.title });
-      continue;
-    }
-    try {
-      const canonical = await getConversationMessages(item.conversation_id, getTextClientOptions());
-      const reconciled = getConversationStore().reconcileCanonicalMessages(item.conversation_id, canonical).conversation;
-      const message = reconciled.messages.find((m) => String(m.content || '').toLowerCase().includes(needle));
-      if (message) matched.push({ ...item, match_count: 1, match_snippet: String(message.content || '').slice(0, 80) });
-    } catch (error) {
-      getConversationStore().markConversationStale(item.conversation_id, error.message);
-    }
-  }
-  return matched;
-}
-
-async function syncCoreConversationProjection(conversationId, title = 'New Conversation') {
-  const canonical = await ensureConversationMessages(conversationId, title, getTextClientOptions());
-  return getConversationStore().reconcileCanonicalMessages(conversationId, canonical).conversation;
-}
-
-async function getCurrentCoreConversationProjection() {
-  const cached = getConversationStore().getCachedCurrentConversation();
-  if (cached?.conversation_id) {
-    try {
-      return await syncCoreConversationProjection(cached.conversation_id, cached.title || 'New Conversation');
-    } catch (error) {
-      if (error.status !== 404) {
-        getConversationStore().markConversationStale(cached.conversation_id, error.message);
-        return cached;
-      }
-    }
-  }
-
-  const items = await listConversationsViaCore(getTextClientOptions());
-  cacheCoreConversationSummaries(items);
-  if (items.length > 0) {
-    const first = items[0];
-    return syncCoreConversationProjection(first.conversation_id, first.title || 'New Conversation');
-  }
-
-  const canonical = await createConversationViaCore('New Conversation', getTextClientOptions());
-  return getConversationStore().createConversationWithId(canonical.conversation_id, canonical.title || 'New Conversation');
-}
 
 function getWindowState(win) {
   const bounds = win.getBounds();
@@ -333,78 +267,9 @@ ipcMain.handle('julia:text:stream', async (event, input) => {
   }
 });
 
-ipcMain.handle('julia:conversation:list', async () => {
-  return listCoreConversationProjection();
-});
-
-ipcMain.handle('julia:conversation:current', async () => {
-  return getCurrentCoreConversationProjection();
-});
-
-ipcMain.handle('julia:conversation:create', async (_event, input) => {
-  const title = input?.title || 'New Conversation';
-  const canonical = await createConversationViaCore(title, getTextClientOptions());
-  return getConversationStore().createConversationWithId(canonical.conversation_id, canonical.title || title);
-});
-
-ipcMain.handle('julia:conversation:open', async (_event, input) => {
-  const conversationId = String(input?.conversationId || '').trim();
-  if (!conversationId) throw new Error('Conversation ID is required');
-  return syncCoreConversationProjection(conversationId);
-});
-
-ipcMain.handle('julia:conversation:add-message', async (_event, input) => {
-  return getConversationStore().addMessage(input?.conversationId, input?.message || {});
-});
-
-ipcMain.handle('julia:conversation:rename', async (_event, input) => {
-  return getConversationStore().renameConversation(input?.conversationId, input?.title);
-});
-
-ipcMain.handle('julia:conversation:delete', async (_event, input) => {
-  return getConversationStore().deleteConversation(input?.conversationId);
-});
-
-ipcMain.handle('julia:conversation:search', async (_event, input) => {
-  return listCoreConversationProjection(input?.query);
-});
-
-ipcMain.handle('julia:cache:status', async () => {
-  return getConversationStore().getCacheStatus();
-});
-
-ipcMain.handle('julia:cache:clear-local', async () => {
-  return getConversationStore().clearLocalCache();
-});
-
-ipcMain.handle('julia:conversation:sync', async (_event, input) => {
-  const conversationId = String(input?.conversationId || '').trim();
-  if (!conversationId) throw new Error('Conversation ID is required');
-  const cached = getConversationStore().getConversation(conversationId);
-  let canonical;
-  try {
-    canonical = await ensureConversationMessages(
-      conversationId,
-      cached?.title || 'New Conversation',
-      getTextClientOptions()
-    );
-  } catch (error) {
-    getConversationStore().markConversationStale(conversationId, error.message);
-    throw error;
-  }
-  return {
-    ...getConversationStore().reconcileCanonicalMessages(conversationId, canonical),
-    canonical: {
-      conversation_id: canonical.conversation_id,
-      title: canonical.title,
-      last_message_id: canonical.last_message_id,
-      messages: canonical.messages,
-    },
-  };
-});
-
-ipcMain.handle('julia:conversation:commit-external', async (_event, input) => {
-  return commitExternalTurns(input, getTextClientOptions());
+registerConversationIpcHandlers(ipcMain, {
+  getConversationStore,
+  getTextClientOptions,
 });
 
 ipcMain.handle('julia:settings:get', async () => {

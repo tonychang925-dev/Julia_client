@@ -398,7 +398,9 @@ class ConversationStore {
     let inserted = 0;
     let updated = 0;
     let removedLocal = 0;
+    let removedStaleCanonical = 0;
     const canonicalMessages = Array.isArray(canonical.messages) ? canonical.messages : [];
+    const canonicalProjectionKeys = new Set();
 
     conversation.projection = normalizeProjectionMetadata({
       ...conversation.projection,
@@ -431,6 +433,8 @@ class ConversationStore {
         created_at: message.created_at || nowIso(),
         metadata: { source: 'julia-core-canonical' },
       };
+      canonicalProjectionKeys.add(`message:${normalized.message_id}`);
+      canonicalProjectionKeys.add(`turn-role:${normalized.turn_id}:${normalized.role}`);
 
       const index = conversation.messages.findIndex((item) => (
         item.message_id === normalized.message_id
@@ -448,9 +452,18 @@ class ConversationStore {
     conversation.messages = conversation.messages.filter((message) => {
       const isUnconfirmedLocal = message.metadata?.source === 'julia-electron-local'
         && ['pending', 'failed'].includes(message.status);
-      if (!isUnconfirmedLocal) return true;
-      removedLocal += 1;
-      return false;
+      if (isUnconfirmedLocal) {
+        removedLocal += 1;
+        return false;
+      }
+      const isStaleCanonicalProjection = message.metadata?.source === 'julia-core-canonical'
+        && !canonicalProjectionKeys.has(`message:${message.message_id}`)
+        && !canonicalProjectionKeys.has(`turn-role:${message.turn_id}:${message.role}`);
+      if (isStaleCanonicalProjection) {
+        removedStaleCanonical += 1;
+        return false;
+      }
+      return true;
     });
 
     conversation.messages.sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)));
@@ -468,6 +481,7 @@ class ConversationStore {
         inserted,
         updated,
         removed_local: removedLocal,
+        removed_stale_canonical: removedStaleCanonical,
       },
     };
   }
