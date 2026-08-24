@@ -150,6 +150,33 @@ function applyVoiceRuntimeEvent(payload) {
   }
 }
 
+// Post-AT20 strategy (VOICE-WS-LIFECYCLE-001): Voice is an explicit, per-entry
+// session. Leaving Voice for Text fully unloads the voice frame so its S2S
+// realtime slot is released server-side; returning to Voice re-loads and
+// re-bootstraps a fresh session. This eliminates the single-slot handoff race
+// (1008 on rapid conversation switch) instead of masking it with retries.
+function teardownVoiceFrame() {
+  if (!voiceLoaded) return;
+  try {
+    voiceFrame.src = 'about:blank';
+  } catch {
+    // ignored
+  }
+  voiceLoaded = false;
+  voiceFrameReady = false;
+  voiceLoadPromise = null;
+  voiceLifecycleState = 'paused';
+  boundVoiceConversationId = null;
+  voiceWorkspaceSessionId = null;
+  voiceSessionCache.messages = [];
+  voiceSessionCache._cid = null;
+  pendingVoiceCommands.forEach((entry) => {
+    clearTimeout(entry.timeout);
+    entry.reject(new Error('Voice frame unloaded (text mode)'));
+  });
+  pendingVoiceCommands.clear();
+}
+
 function ensureVoiceLoaded() {
   if (voiceLoaded) return;
   voiceLoadPromise = new Promise((resolve) => {
@@ -328,11 +355,29 @@ async function bindVoiceConversation(conversationId = activeConversationId) {
     throw new Error('Canonical conversation bootstrap mismatch');
   }
   setVoiceLifecycleStatus('Loading conversation into Voice…', 'bootstrapping');
-  const result = await sendVoiceWorkspaceRequest('julia.voice.workspace.bootstrap', {
-    conversationId: targetId,
-    baseLastMessageId: canonical.last_message_id || '',
-    messages: canonical.messages || [],
-  }, 30000);
+  // AT-20B: S2S single-slot release race. Frontend close() is fire-and-forget
+  // (does not await server unregister), so a fast conversation switch can hit
+  // `1008 All session slots are in use` in the ~36ms handoff window. Retry only
+  // that transient error with escalating backoff; everything else fails fast.
+  const MAX_RETRIES = 3;
+  const RETRY_DELAYS = [300, 700, 1500];
+  let result;
+  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      result = await sendVoiceWorkspaceRequest('julia.voice.workspace.bootstrap', {
+        conversationId: targetId,
+        baseLastMessageId: canonical.last_message_id || '',
+        messages: canonical.messages || [],
+      }, 30000);
+      break;
+    } catch (err) {
+      const msg = err?.message || String(err);
+      const isSlotRace = /1008|All session slots are in use/i.test(msg);
+      if (!isSlotRace || attempt === MAX_RETRIES) throw err;
+      setVoiceLifecycleStatus(`Voice handoff race — retrying (${attempt}/${MAX_RETRIES})…`, 'bootstrapping');
+      await new Promise((resolve) => setTimeout(resolve, RETRY_DELAYS[attempt - 1]));
+    }
+  }
   if (result.conversationId !== targetId) throw new Error('Voice bootstrap acknowledged another conversation');
   boundVoiceConversationId = targetId;
   voiceWorkspaceSessionId = result.voiceSessionId;
@@ -422,6 +467,7 @@ async function switchToTextMode(reason = 'text') {
   try {
     await pauseVoiceCapture(reason);
     await flushVoiceWorkspace(reason);
+    teardownVoiceFrame();
     showSurface('text');
   } catch (error) {
     showSurface('voice');
