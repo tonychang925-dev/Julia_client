@@ -267,9 +267,10 @@ ipcMain.handle('julia:text:stream', async (event, input) => {
   }
 });
 
-registerConversationIpcHandlers(ipcMain, {
+const conversationIpcHandlers = registerConversationIpcHandlers(ipcMain, {
   getConversationStore,
   getTextClientOptions,
+  getUserDataPath: () => app.getPath('userData'),
 });
 
 ipcMain.handle('julia:settings:get', async () => {
@@ -306,6 +307,15 @@ app.whenReady().then(async () => {
   conversationStore.load();
   console.log('[V2_CONVERSATION_STORE]', conversationStore.filePath);
   applyDesktopSettings();
+
+  // AT-22: reconcile local projections against Core shortly after startup so
+  // orphaned (locally-minted, Core-unknown) conversations are detected,
+  // evidenced, and removed — never shown as real.
+  setTimeout(() => {
+    conversationIpcHandlers['julia:conversation:reconcile']().catch((error) => {
+      console.warn('[AT22_RECONCILE_STARTUP_FAILED]', error.message);
+    });
+  }, 3000);
 
   app.on('certificate-error', (event, webContents, url, error, certificate, callback) => {
     const allowLocalDev = process.env.JULIA_ALLOW_INSECURE_LOCALHOST_CERT === '1';

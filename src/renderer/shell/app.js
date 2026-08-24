@@ -26,6 +26,8 @@ const conversationList = document.getElementById('conversationList');
 const emptyConversationList = document.getElementById('emptyConversationList');
 const settingsButton = document.getElementById('settingsButton');
 const brainStatusButton = document.getElementById('brainStatusButton');
+const sidebarToggleButton = document.getElementById('sidebarToggleButton');
+const textSurfaceEl = document.getElementById('textSurface');
 const brainStatusDot = document.getElementById('brainStatusDot');
 const brainStatusText = document.getElementById('brainStatusText');
 const settingsPanel = document.getElementById('settingsPanel');
@@ -952,7 +954,17 @@ function renderConversationList(items) {
 
       const itemTitle = document.createElement('div');
       itemTitle.className = 'conversation-title';
-      itemTitle.textContent = item.title || 'New Conversation';
+      const initialTitle = item.title || '新会话';
+      itemTitle.textContent = initialTitle;
+      // AT-22: Brain list API may return a placeholder title (conversation_id
+      // or the "新会话" default). Core owns the real title — resolve it from
+      // canonical detail and update only this projection (never write back a
+      // locally-invented title to the store).
+      if (!initialTitle || initialTitle === item.conversation_id || initialTitle === '新会话') {
+        void resolveCanonicalTitle(item.conversation_id).then((realTitle) => {
+          if (realTitle && itemTitle.isConnected) itemTitle.textContent = realTitle;
+        });
+      }
 
       const meta = document.createElement('div');
       meta.className = 'conversation-meta';
@@ -1078,9 +1090,78 @@ async function deleteConversation(conversationId) {
   if (!ok) return;
 
   const result = await textClient.deleteConversation(conversationId);
-  const next = result.current_conversation || await textClient.getCurrentConversation();
-  activeConversationId = next.conversation_id;
-  renderConversationMessages(next);
+  // AT-22: deletion never mints. current_conversation is null when the
+  // deleted conversation was the current one and nothing else remains —
+  // show the empty state. Do NOT fall back to getCurrentConversation (it
+  // would ensure-create through Core, making the last item "undeletable").
+  const next = result.current_conversation || null;
+  if (next) {
+    activeConversationId = next.conversation_id;
+    renderConversationMessages(next);
+  } else {
+    activeConversationId = null;
+    voiceSessionCacheReset(null);
+    renderConversationMessages(null);
+  }
+  await refreshConversationList();
+  await refreshCacheStatus();
+}
+
+// AT-22: projection-only title resolution. Brain list API historically returns
+// a placeholder title (conversation_id). The canonical title lives in Core;
+// resolve it from canonical detail for DISPLAY only. Cache avoids repeat calls.
+const resolvedTitleCache = new Map();
+async function resolveCanonicalTitle(conversationId) {
+  const id = String(conversationId || '').trim();
+  if (!id) return '新会话';
+  if (resolvedTitleCache.has(id)) return resolvedTitleCache.get(id);
+  let real = '新会话';
+  try {
+    const synced = await textClient.syncConversationMessages(id);
+    const t = typeof synced?.canonical?.title === 'string' ? synced.canonical.title.trim() : '';
+    if (t && t !== id && t !== '新会话' && t !== 'New Conversation') real = t;
+  } catch (error) {
+    console.warn('[AT22_TITLE_RESOLVE_FAILED]', id, error.message);
+  }
+  // Only cache a real (non-default) title. The default "新会话" is NOT cached
+  // so a later rename is picked up on the next render instead of a stale
+  // cache hit (this is why "restart shows the rename but the live UI does not").
+  if (real !== '新会话') resolvedTitleCache.set(id, real);
+  return real;
+}
+
+// AT-21 UX: ChatGPT-style auto-title. Only renames conversations that are
+// still the untitled default ("New Conversation" / "新会话"); never overwrites
+// a user-renamed or already-titled conversation. Uses preload-exposed APIs
+// (syncConversationMessages → canonical.title; renameConversation → Core-first).
+async function maybeAutoTitleConversation(conversationId, userText) {
+  const id = String(conversationId || '').trim();
+  const text = String(userText || '').trim();
+  console.log('[AUTOTITLE] called', { id, text });
+  if (!id || !text) return;
+  let synced;
+  try {
+    synced = await textClient.syncConversationMessages(id);
+  } catch (error) {
+    console.warn('[AUTOTITLE] sync failed', error.message);
+    return;
+  }
+  const currentTitle = typeof synced?.canonical?.title === 'string' ? synced.canonical.title : '';
+  console.log('[AUTOTITLE] canonical.title =', JSON.stringify(currentTitle));
+  if (currentTitle && currentTitle !== 'New Conversation' && currentTitle !== '新会话') {
+    console.log('[AUTOTITLE] skip — already titled');
+    return;
+  }
+  const newTitle = text.replace(/\s+/g, ' ').trim().slice(0, 30);
+  if (!newTitle) return;
+  console.log('[AUTOTITLE] renaming to', newTitle);
+  try {
+    await textClient.renameConversation(id, newTitle);
+    console.log('[AUTOTITLE] rename done');
+  } catch (error) {
+    console.warn('[AUTOTITLE] rename failed', error.message);
+    return;
+  }
   await refreshConversationList();
   await refreshCacheStatus();
 }
@@ -1367,6 +1448,12 @@ async function sendComposerMessage() {
     });
     activeConversationId = userRecord.conversation_id;
     await refreshConversationList();
+    // AT-21 UX: ChatGPT-style auto-title — first user message names the
+    // conversation if it is still the untitled default. Run BEFORE the LLM
+    // turn so naming succeeds even if the model reply fails.
+    await maybeAutoTitleConversation(conversationId, text).catch((error) => {
+      console.warn('[V2_AUTO_TITLE_FAILED]', error.message);
+    });
     await executeTextTurn({ conversationId, turnId, text, reason: 'text-turn' });
   } catch (error) {
     if (conversationId) {
@@ -1419,6 +1506,52 @@ newChatButton.addEventListener('click', () => {
     console.error('[V2_CONVERSATION_CREATE_FAILED]', error);
   });
 });
+
+// AT-21 UX: draggable sidebar divider (expand/collapse left column).
+(function initSidebarResizer() {
+  const resizer = document.getElementById('sidebarResizer');
+  const rootEl = document.documentElement;
+  if (!resizer) return;
+  const MIN_W = 180;
+  const MAX_W = 520;
+  const saved = Number(localStorage.getItem('julia.sidebar.width'));
+  if (Number.isFinite(saved) && saved >= MIN_W && saved <= MAX_W) {
+    rootEl.style.setProperty('--sidebar-w', `${saved}px`);
+  }
+  let dragging = false;
+  resizer.addEventListener('mousedown', (event) => {
+    dragging = true;
+    resizer.classList.add('dragging');
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+    event.preventDefault();
+  });
+  window.addEventListener('mousemove', (event) => {
+    if (!dragging) return;
+    const width = Math.min(MAX_W, Math.max(MIN_W, event.clientX));
+    rootEl.style.setProperty('--sidebar-w', `${width}px`);
+  });
+  window.addEventListener('mouseup', () => {
+    if (!dragging) return;
+    dragging = false;
+    resizer.classList.remove('dragging');
+    document.body.style.cursor = '';
+    document.body.style.userSelect = '';
+    const width = parseFloat(getComputedStyle(rootEl).getPropertyValue('--sidebar-w')) || 260;
+    localStorage.setItem('julia.sidebar.width', String(width));
+  });
+
+  // Collapse / expand sidebar (minimize). Persisted like the drag width.
+  if (sidebarToggleButton && textSurfaceEl) {
+    if (localStorage.getItem('julia.sidebar.collapsed') === '1') {
+      textSurfaceEl.classList.add('sidebar-collapsed');
+    }
+    sidebarToggleButton.addEventListener('click', () => {
+      const collapsed = textSurfaceEl.classList.toggle('sidebar-collapsed');
+      localStorage.setItem('julia.sidebar.collapsed', collapsed ? '1' : '0');
+    });
+  }
+})();
 
 conversationList.addEventListener('click', (event) => {
   const action = event.target.closest('.conversation-action');

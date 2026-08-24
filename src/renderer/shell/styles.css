@@ -121,15 +121,80 @@ button, input { font: inherit; }
 
 .text-surface {
   display: grid;
-  grid-template-columns: 260px 1fr;
+  /* --sidebar-w is driven by the drag handle (default 260px). */
+  grid-template-columns: var(--sidebar-w, 260px) 5px 1fr;
   min-height: 0;
+}
+
+/* Collapsed sidebar (toggle button in topbar). */
+.text-surface.sidebar-collapsed {
+  grid-template-columns: 0px 0px 1fr;
+}
+.text-surface.sidebar-collapsed .sidebar {
+  display: none;
+}
+.text-surface.sidebar-collapsed .sidebar-resizer {
+  display: none;
+}
+
+.sidebar-toggle {
+  border: 1px solid var(--border);
+  color: var(--text);
+  background: var(--panel);
+  border-radius: 10px;
+  width: 32px;
+  height: 32px;
+  line-height: 1;
+  cursor: pointer;
+  margin-left: 8px;
+  font-size: 16px;
+  flex: none;
+}
+.sidebar-toggle:hover {
+  border-color: rgba(183, 140, 255, .5);
+}
+
+.sidebar-resizer {
+  cursor: col-resize;
+  background: rgba(255, 255, 255, 0.06);
+  transition: background .15s ease;
+  position: relative;
+}
+.sidebar-resizer:hover,
+.sidebar-resizer.dragging {
+  background: rgba(183, 140, 255, .4);
+}
+.sidebar-resizer::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 2px;
+  height: 40px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.12);
+  pointer-events: none;
+}
+.sidebar-resizer:hover::after {
+  background: rgba(255, 255, 255, 0.7);
 }
 
 .sidebar {
   padding: 18px;
   border-right: 1px solid var(--border);
   background: #10141d;
-  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* AT-21 UX fix: conversation list scrolls inside the sidebar, never pushes
+   the New-Chat button / search out of view. Button row stays pinned. */
+.conversation-list {
+  flex: 1;
+  overflow-y: auto;
+  min-height: 0;
 }
 
 .new-chat-button, .conversation-item, .conversation-action, .primary-action, .back-button {
@@ -170,17 +235,21 @@ button, input { font: inherit; }
 .conversation-group.muted { opacity: .72; }
 .conversation-row {
   display: grid;
-  grid-template-columns: 1fr auto;
+  /* minmax(0,1fr): title column must be allowed to shrink so a long
+     nowrap title cannot push the delete action out of the sidebar. */
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: stretch;
   gap: 6px;
   margin: 6px 0;
 }
 .conversation-item {
   width: 100%;
+  min-width: 0;
   display: block;
   padding: 11px 12px;
   text-align: left;
   color: var(--muted);
+  box-sizing: border-box;
 }
 .conversation-item.active {
   color: var(--text);

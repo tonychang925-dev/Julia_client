@@ -162,9 +162,14 @@ async function listConversationsViaCore(options = {}) {
   return raw.map((item) => {
     const conversationId = String(item?.conversation_id || item?.id || '').trim();
     if (!conversationId) return null;
+    // Brain list API historically returned conversation_id as a title
+    // placeholder. Treat a title that equals the conversation id as
+    // untitled ("新会话") so the sidebar never shows raw IDs.
+    const rawTitle = typeof item.title === 'string' ? item.title.trim() : '';
+    const title = (rawTitle && rawTitle !== conversationId) ? rawTitle : '新会话';
     return {
       conversation_id: conversationId,
-      title: typeof item.title === 'string' && item.title.trim() ? item.title : 'New Conversation',
+      title,
       created_at: item.created_at || item.createdAt || null,
       updated_at: item.updated_at || item.updatedAt || item.last_message_at || null,
       message_count: Number.isFinite(Number(item.message_count)) ? Number(item.message_count) : undefined,
@@ -329,6 +334,42 @@ async function createConversationViaCore(title = 'New Conversation', options = {
   return response.json();
 }
 
+async function renameConversationViaCore(conversationId, title, options = {}) {
+  const id = String(conversationId || '').trim();
+  if (!id) throw new Error('Conversation ID is required');
+  const url = buildConversationDetailApiUrl(options.brainEndpoint, id);
+  const response = await fetch(url, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: JSON.stringify({ title }),
+  });
+  if (!response.ok) {
+    const body = await response.text().catch(() => '');
+    throw new Error(`Core rename failed: HTTP ${response.status}${body ? ` ${body.slice(0, 200)}` : ''}`);
+  }
+  return response.json();
+}
+
+async function deleteConversationViaCore(conversationId, options = {}) {
+  const id = String(conversationId || '').trim();
+  if (!id) throw new Error('Conversation ID is required');
+  const url = buildConversationDetailApiUrl(options.brainEndpoint, id);
+  const response = await fetch(url, {
+    method: 'DELETE',
+    headers: { Accept: 'application/json' },
+  });
+  if (!response.ok) {
+    // A Core-orphaned local projection (id unknown to Brain) is still deleted
+    // locally: treat 404 as "already gone from Core" so deletion succeeds.
+    if (response.status === 404) {
+      return { status: 'deleted', conversation_id: id, core_present: false };
+    }
+    const body = await response.text().catch(() => '');
+    throw new Error(`Core delete failed: HTTP ${response.status}${body ? ` ${body.slice(0, 200)}` : ''}`);
+  }
+  return response.json();
+}
+
 module.exports = {
   DEFAULT_BRAIN_ENDPOINT,
   buildConversationMessagesApiUrl,
@@ -342,6 +383,8 @@ module.exports = {
   ensureConversationMessages,
   listConversationsViaCore,
   createConversationViaCore,
+  renameConversationViaCore,
+  deleteConversationViaCore,
   commitExternalTurns,
   getTextApiUrl,
   normalizeTurnRequest,

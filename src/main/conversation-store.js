@@ -201,11 +201,15 @@ class ConversationStore {
         currentConversation = this.state.conversations[0];
         this.state.currentConversationId = currentConversation.conversation_id;
       } else {
+        // AT-22: deleting the last conversation leaves the store empty.
+        // Never mint a local conversation here — creation is Core-owned and
+        // user-initiated (New Chat). current_conversation: null means "no
+        // current"; callers must ask Core (or show the empty state).
         this.state.currentConversationId = null;
-        currentConversation = this.createConversation('New Conversation');
         return {
           deleted_conversation_id: deleted.conversation_id,
-          current_conversation: currentConversation,
+          current_conversation: null,
+          empty: true,
         };
       }
     } else if (this.state.currentConversationId) {
@@ -269,6 +273,27 @@ class ConversationStore {
     return conversation;
   }
 
+  // Identity Ownership (AT-22): a projection without canonical authority is an
+  // orphan. Remove it from the local store entirely (not mark stale) so a
+  // phantom conversation can never be shown or opened as if it were real.
+  removeConversation(conversationId) {
+    this.load();
+    const index = this.state.conversations.findIndex((item) => item.conversation_id === conversationId);
+    if (index < 0) return false;
+    this.state.conversations.splice(index, 1);
+    if (this.state.currentConversationId === conversationId) {
+      this.state.currentConversationId = null;
+    }
+    this.save();
+    return true;
+  }
+
+  // AT-22: minted conversation ids are Core-owned. Locally-created ids
+  // (conv_mt...) have no canonical authority and must not be treated as real.
+  isOrphanId(conversationId) {
+    return /^conv_mt/i.test(String(conversationId || ''));
+  }
+
   searchConversations(query) {
     this.load();
     const needle = String(query || '').trim().toLowerCase();
@@ -320,7 +345,9 @@ class ConversationStore {
       return cached;
     }
 
-    return this.createConversation('New Conversation');
+    // AT-22: no local minting. A missing current means "ask Core"; callers
+    // that need a guaranteed conversation must go through ensureCurrentCoreConversation.
+    return null;
   }
 
   setCurrentConversation(conversationId) {
