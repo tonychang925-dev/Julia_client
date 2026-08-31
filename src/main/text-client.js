@@ -1,4 +1,5 @@
 const { normalizeBrainEndpointUrl } = require('./endpoint-policy');
+const { brainFetch, createTransportError } = require('./brain-fetch');
 
 const DEFAULT_BRAIN_ENDPOINT = 'http://127.0.0.1:18089';
 const DEFAULT_REQUEST_TIMEOUT_MS = 30000;
@@ -7,14 +8,6 @@ const DEFAULT_STREAM_IDLE_TIMEOUT_MS = 30000;
 const MAX_STREAM_IDLE_TIMEOUT_MS = 60000;
 const DEFAULT_STREAM_TOTAL_TIMEOUT_MS = 300000;
 const MAX_STREAM_TOTAL_TIMEOUT_MS = 300000;
-
-function createTransportError(code, message, options = {}) {
-  const error = new Error(message);
-  error.code = code;
-  if (options.status !== undefined) error.status = options.status;
-  if (options.phase) error.phase = options.phase;
-  return error;
-}
 
 function resolveTimeoutMs(value, defaultValue, maxValue, label) {
   if (value === undefined || value === null) return defaultValue;
@@ -101,7 +94,7 @@ function buildConversationDetailApiUrl(brainEndpoint, conversationId) {
 }
 
 async function getConversationDetail(conversationId, options = {}) {
-  const response = await fetch(buildConversationDetailApiUrl(options.brainEndpoint, conversationId), {
+  const response = await brainFetch(buildConversationDetailApiUrl(options.brainEndpoint, conversationId), {
     method: 'GET', headers: { Accept: 'application/json' },
   });
   if (!response.ok) {
@@ -155,7 +148,7 @@ function buildTurnBody(turn, stream) {
 async function getConversationMessages(conversationId, options = {}) {
   const id = String(conversationId || '').trim();
   const url = buildConversationMessagesApiUrl(options.brainEndpoint, id);
-  const response = await fetch(url, {
+  const response = await brainFetch(url, {
     method: 'GET',
     headers: { Accept: 'application/json' },
   });
@@ -213,7 +206,7 @@ async function ensureConversationMessages(conversationId, _title = 'New Conversa
 }
 
 async function listConversationsViaCore(options = {}) {
-  const response = await fetch(buildConversationsApiUrl(options.brainEndpoint), {
+  const response = await brainFetch(buildConversationsApiUrl(options.brainEndpoint), {
     method: 'GET',
     headers: { Accept: 'application/json' },
   });
@@ -265,13 +258,12 @@ async function sendTextMessage(input, options = {}) {
 
   let data;
   try {
-    const response = await fetch(url, {
+    const response = await brainFetch(url, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify(buildTurnBody(turn, false)),
-      redirect: 'error',
       signal: coordinator.controller.signal,
     });
     if (!response.ok) {
@@ -376,16 +368,17 @@ async function streamTextMessage(input, handlers = {}, options = {}) {
 
   let response;
   try {
-    response = await fetch(url, {
+    response = await brainFetch(url, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify(buildTurnBody(turn, true)),
-      redirect: 'error',
       signal: coordinator.controller.signal,
     });
   } catch (error) {
+    clearTimeout(totalTimeout);
+    coordinator.disconnectExternalSignal();
     throw classifyTransportError(error, coordinator.abortCode);
   } finally {
     clearTimeout(connectTimeout);
@@ -491,7 +484,7 @@ async function streamTextMessage(input, handlers = {}, options = {}) {
 
 async function createConversationViaCore(title = 'New Conversation', options = {}) {
   const url = buildConversationsApiUrl(options.brainEndpoint);
-  const response = await fetch(url, {
+  const response = await brainFetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
     body: JSON.stringify({ title }),
@@ -507,7 +500,7 @@ async function renameConversationViaCore(conversationId, title, options = {}) {
   const id = String(conversationId || '').trim();
   if (!id) throw new Error('Conversation ID is required');
   const url = buildConversationDetailApiUrl(options.brainEndpoint, id);
-  const response = await fetch(url, {
+  const response = await brainFetch(url, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
     body: JSON.stringify({ title }),
@@ -523,7 +516,7 @@ async function deleteConversationViaCore(conversationId, options = {}) {
   const id = String(conversationId || '').trim();
   if (!id) throw new Error('Conversation ID is required');
   const url = buildConversationDetailApiUrl(options.brainEndpoint, id);
-  const response = await fetch(url, {
+  const response = await brainFetch(url, {
     method: 'DELETE',
     headers: { Accept: 'application/json' },
   });

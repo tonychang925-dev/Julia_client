@@ -1,4 +1,5 @@
 const { normalizeBrainEndpointUrl } = require('./endpoint-policy');
+const { brainFetch } = require('./brain-fetch');
 
 function buildBrainHealthUrl(brainEndpoint) {
   return new URL('/internal/v1/voice/health', normalizeBrainEndpointUrl(brainEndpoint)).toString();
@@ -10,7 +11,7 @@ async function getBrainStatus(brainEndpoint, timeoutMs = 2500) {
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
-    const response = await fetch(healthUrl, {
+    const response = await brainFetch(healthUrl, {
       method: 'GET',
       signal: controller.signal,
     });
@@ -20,8 +21,9 @@ async function getBrainStatus(brainEndpoint, timeoutMs = 2500) {
         connected: false,
         endpoint: brainEndpoint,
         healthUrl,
-        status: 'offline',
-        error: `HTTP ${response.status}`,
+      status: 'offline',
+      error: `HTTP ${response.status}`,
+      code: 'http_error',
         checked_at: new Date().toISOString(),
       };
     }
@@ -48,6 +50,7 @@ async function getBrainStatus(brainEndpoint, timeoutMs = 2500) {
       healthUrl,
       status: 'offline',
       error: error.name === 'AbortError' ? 'timeout' : error.message,
+      code: error.code || (error.name === 'AbortError' ? 'request_timeout' : 'network_error'),
       checked_at: new Date().toISOString(),
     };
   } finally {
