@@ -14,6 +14,17 @@ function normalizeBrainEndpointUrl(value) {
   const raw = String(value ?? '').trim();
   if (!raw) throw createEndpointPolicyError('empty', raw);
 
+  const parsed = validateBrainRequestUrl(raw);
+  parsed.search = '';
+  parsed.hash = '';
+  parsed.pathname = parsed.pathname.replace(/\/+$/, '');
+  return parsed.toString().replace(/\/$/, '');
+}
+
+function validateBrainRequestUrl(value) {
+  const raw = String(value ?? '').trim();
+  if (!raw) throw createEndpointPolicyError('empty', raw);
+
   let parsed;
   try {
     parsed = new URL(raw);
@@ -45,14 +56,12 @@ function normalizeBrainEndpointUrl(value) {
     throw createEndpointPolicyError('non_loopback_host', raw);
   }
 
-  parsed.search = '';
-  parsed.hash = '';
-  parsed.pathname = parsed.pathname.replace(/\/+$/, '');
-  return parsed.toString().replace(/\/$/, '');
+  return parsed;
 }
 
 module.exports = {
   ALLOWED_RAW_HOSTS,
   ALLOWED_PROTOCOLS,
   normalizeBrainEndpointUrl,
+  validateBrainRequestUrl,
 };

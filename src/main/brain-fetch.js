@@ -1,3 +1,5 @@
+const { validateBrainRequestUrl } = require('./endpoint-policy');
+
 function createTransportError(code, message, options = {}) {
   const error = new Error(message);
   error.code = code;
@@ -13,13 +15,14 @@ function isRedirectRejection(error) {
 }
 
 async function brainFetch(url, init = {}) {
+  const trustedUrl = validateBrainRequestUrl(url).toString();
   try {
-    return await fetch(url, { ...init, redirect: 'error' });
+    return await fetch(trustedUrl, { ...init, redirect: 'error' });
   } catch (error) {
     if (isRedirectRejection(error)) {
       throw createTransportError(
         'redirect_rejected',
-        `Julia Brain redirect was forbidden and rejected: ${url}`
+        `Julia Brain redirect was forbidden and rejected: ${trustedUrl}`
       );
     }
     throw error;
