@@ -1,5 +1,7 @@
+const { normalizeBrainEndpointUrl } = require('./endpoint-policy');
+
 function buildBrainHealthUrl(brainEndpoint) {
-  return new URL('/internal/v1/voice/health', brainEndpoint).toString();
+  return new URL('/internal/v1/voice/health', normalizeBrainEndpointUrl(brainEndpoint)).toString();
 }
 
 async function getBrainStatus(brainEndpoint, timeoutMs = 2500) {

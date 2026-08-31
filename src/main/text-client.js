@@ -1,11 +1,80 @@
+const { normalizeBrainEndpointUrl } = require('./endpoint-policy');
+
 const DEFAULT_BRAIN_ENDPOINT = 'http://127.0.0.1:18089';
+const DEFAULT_REQUEST_TIMEOUT_MS = 30000;
+const MAX_REQUEST_TIMEOUT_MS = 60000;
+const DEFAULT_STREAM_IDLE_TIMEOUT_MS = 30000;
+const MAX_STREAM_IDLE_TIMEOUT_MS = 60000;
+const DEFAULT_STREAM_TOTAL_TIMEOUT_MS = 300000;
+const MAX_STREAM_TOTAL_TIMEOUT_MS = 300000;
+
+function createTransportError(code, message, options = {}) {
+  const error = new Error(message);
+  error.code = code;
+  if (options.status !== undefined) error.status = options.status;
+  if (options.phase) error.phase = options.phase;
+  return error;
+}
+
+function resolveTimeoutMs(value, defaultValue, maxValue, label) {
+  if (value === undefined || value === null) return defaultValue;
+  const timeoutMs = Number(value);
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    throw createTransportError('invalid_timeout', `${label} must be a positive number`);
+  }
+  return Math.min(timeoutMs, maxValue);
+}
+
+function normalizeEndpoint(endpoint) {
+  return normalizeBrainEndpointUrl(endpoint || DEFAULT_BRAIN_ENDPOINT);
+}
+
+function classifyTransportError(error, abortCode) {
+  if (error?.name === 'AbortError') {
+    if (abortCode === 'request_aborted') {
+      return createTransportError('request_aborted', 'Julia request was aborted before completion');
+    }
+    const phase = abortCode || 'request';
+    const label = phase === 'stream_idle' || phase === 'stream_total'
+      ? `Julia stream ${phase.replace('stream_', '')} timeout`
+      : 'Julia request timed out';
+    return createTransportError('request_timeout', label, { phase });
+  }
+  if (typeof error?.code === 'string') return error;
+  return createTransportError(
+    'network_error',
+    error?.message || 'Julia network request failed'
+  );
+}
+
+function createAbortCoordinator(externalSignal) {
+  const controller = new AbortController();
+  let abortCode = null;
+
+  const abortWith = (code) => {
+    if (!abortCode) abortCode = code;
+    controller.abort();
+  };
+
+  const forwardExternalAbort = () => abortWith('request_aborted');
+  if (externalSignal) {
+    if (externalSignal.aborted) forwardExternalAbort();
+    else externalSignal.addEventListener('abort', forwardExternalAbort, { once: true });
+  }
+
+  const disconnectExternalSignal = () => {
+    externalSignal?.removeEventListener?.('abort', forwardExternalAbort);
+  };
+
+  return { controller, abortWith, get abortCode() { return abortCode; }, disconnectExternalSignal };
+}
 
 function buildConversationTurnApiUrl(brainEndpoint, conversationId) {
   const id = String(conversationId || '').trim();
   if (!id) throw new Error('Conversation ID is required');
   return new URL(
     `/internal/v1/conversations/${encodeURIComponent(id)}/turns`,
-    brainEndpoint || DEFAULT_BRAIN_ENDPOINT
+    normalizeEndpoint(brainEndpoint)
   ).toString();
 }
 
@@ -14,12 +83,12 @@ function buildConversationMessagesApiUrl(brainEndpoint, conversationId) {
   if (!id) throw new Error('Conversation ID is required');
   return new URL(
     `/internal/v1/conversations/${encodeURIComponent(id)}/messages`,
-    brainEndpoint || DEFAULT_BRAIN_ENDPOINT
+    normalizeEndpoint(brainEndpoint)
   ).toString();
 }
 
 function buildConversationsApiUrl(brainEndpoint) {
-  return new URL('/internal/v1/conversations', brainEndpoint || DEFAULT_BRAIN_ENDPOINT).toString();
+  return new URL('/internal/v1/conversations', normalizeEndpoint(brainEndpoint)).toString();
 }
 
 function buildConversationDetailApiUrl(brainEndpoint, conversationId) {
@@ -27,7 +96,7 @@ function buildConversationDetailApiUrl(brainEndpoint, conversationId) {
   if (!id) throw new Error('Conversation ID is required');
   return new URL(
     `/internal/v1/conversations/${encodeURIComponent(id)}`,
-    brainEndpoint || DEFAULT_BRAIN_ENDPOINT
+    normalizeEndpoint(brainEndpoint)
   ).toString();
 }
 
@@ -51,7 +120,7 @@ function getTextApiUrl(input, options = {}) {
 }
 
 function getConversationTurnApiTemplate(options = {}) {
-  const endpoint = process.env.JULIA_TEXT_API_URL || options.brainEndpoint || DEFAULT_BRAIN_ENDPOINT;
+  const endpoint = normalizeEndpoint(process.env.JULIA_TEXT_API_URL || options.brainEndpoint);
   return new URL('/internal/v1/conversations/{conversation_id}/turns', endpoint).toString();
 }
 
@@ -185,26 +254,52 @@ async function commitExternalTurns() {
 async function sendTextMessage(input, options = {}) {
   const turn = normalizeTurnRequest(input);
   const url = getTextApiUrl(turn, options);
+  const timeoutMs = resolveTimeoutMs(
+    options.timeoutMs,
+    DEFAULT_REQUEST_TIMEOUT_MS,
+    MAX_REQUEST_TIMEOUT_MS,
+    'Request timeout'
+  );
+  const coordinator = createAbortCoordinator(options.signal);
+  const timeout = setTimeout(() => coordinator.abortWith('request_timeout'), timeoutMs);
 
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(buildTurnBody(turn, false)),
-  });
-
-  if (!response.ok) {
-    const body = await response.text().catch(() => '');
-    throw new Error(`Julia text request failed: HTTP ${response.status}${body ? ` ${body.slice(0, 240)}` : ''}`);
+  let data;
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(buildTurnBody(turn, false)),
+      redirect: 'error',
+      signal: coordinator.controller.signal,
+    });
+    if (!response.ok) {
+      const body = await response.text().catch(() => '');
+      throw createTransportError(
+        'http_error',
+        `Julia text request failed: HTTP ${response.status}${body ? ` ${body.slice(0, 240)}` : ''}`,
+        { status: response.status }
+      );
+    }
+    data = await response.json();
+  } catch (error) {
+    throw classifyTransportError(error, coordinator.abortCode);
+  } finally {
+    clearTimeout(timeout);
+    coordinator.disconnectExternalSignal();
   }
-
-  const data = await response.json();
   if (data?.conversation_id && data.conversation_id !== turn.conversationId) {
-    throw new Error(`Julia conversation mismatch: ${data.conversation_id} != ${turn.conversationId}`);
+    throw createTransportError(
+      'response_mismatch',
+      `Julia conversation mismatch: ${data.conversation_id} != ${turn.conversationId}`
+    );
   }
   if (data?.turn_id && data.turn_id !== turn.turnId) {
-    throw new Error(`Julia turn mismatch: ${data.turn_id} != ${turn.turnId}`);
+    throw createTransportError(
+      'response_mismatch',
+      `Julia turn mismatch: ${data.turn_id} != ${turn.turnId}`
+    );
   }
 
   const content = data?.content;
@@ -252,61 +347,135 @@ async function streamTextMessage(input, handlers = {}, options = {}) {
   const turn = normalizeTurnRequest(input);
   const url = getTextApiUrl(turn, options);
   const onDelta = typeof handlers.onDelta === 'function' ? handlers.onDelta : () => {};
+  const connectTimeoutMs = resolveTimeoutMs(
+    options.connectTimeoutMs ?? options.timeoutMs,
+    DEFAULT_REQUEST_TIMEOUT_MS,
+    MAX_REQUEST_TIMEOUT_MS,
+    'Stream connect timeout'
+  );
+  const idleTimeoutMs = resolveTimeoutMs(
+    options.streamIdleTimeoutMs,
+    DEFAULT_STREAM_IDLE_TIMEOUT_MS,
+    MAX_STREAM_IDLE_TIMEOUT_MS,
+    'Stream idle timeout'
+  );
+  const totalTimeoutMs = resolveTimeoutMs(
+    options.streamTotalTimeoutMs,
+    DEFAULT_STREAM_TOTAL_TIMEOUT_MS,
+    MAX_STREAM_TOTAL_TIMEOUT_MS,
+    'Stream total timeout'
+  );
+  const coordinator = createAbortCoordinator(options.signal);
+  const totalTimeout = setTimeout(() => coordinator.abortWith('stream_total'), totalTimeoutMs);
+  const connectTimeout = setTimeout(() => coordinator.abortWith('request_timeout'), connectTimeoutMs);
+  let idleTimeout = null;
+  const resetIdleTimeout = () => {
+    clearTimeout(idleTimeout);
+    idleTimeout = setTimeout(() => coordinator.abortWith('stream_idle'), idleTimeoutMs);
+  };
 
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(buildTurnBody(turn, true)),
-  });
+  let response;
+  try {
+    response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(buildTurnBody(turn, true)),
+      redirect: 'error',
+      signal: coordinator.controller.signal,
+    });
+  } catch (error) {
+    throw classifyTransportError(error, coordinator.abortCode);
+  } finally {
+    clearTimeout(connectTimeout);
+  }
 
   if (!response.ok) {
     const body = await response.text().catch(() => '');
-    throw new Error(`Julia text stream failed: HTTP ${response.status}${body ? ` ${body.slice(0, 240)}` : ''}`);
+    clearTimeout(totalTimeout);
+    coordinator.disconnectExternalSignal();
+    throw createTransportError(
+      'http_error',
+      `Julia text stream failed: HTTP ${response.status}${body ? ` ${body.slice(0, 240)}` : ''}`,
+      { status: response.status }
+    );
   }
 
   if (!response.body) {
-    throw new Error('Julia text stream did not provide a response body');
+    clearTimeout(totalTimeout);
+    coordinator.disconnectExternalSignal();
+    throw createTransportError('stream_protocol_error', 'Julia text stream did not provide a response body');
   }
 
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = '';
   let content = '';
+  let sawCompletion = false;
+  resetIdleTimeout();
 
-  while (true) {
-    const { done, value } = await reader.read();
-    if (value) {
-      buffer += decoder.decode(value, { stream: !done });
-      const lines = buffer.split(/\r?\n/);
-      buffer = lines.pop() || '';
+  try {
+    while (!sawCompletion) {
+      const { done, value } = await reader.read();
+      if (value) {
+        resetIdleTimeout();
+        buffer += decoder.decode(value, { stream: !done });
+        const lines = buffer.split(/\r?\n/);
+        buffer = lines.pop() || '';
 
-      for (const line of lines) {
-        const parsed = parseOpenAiSseChunk(line);
-        if (!parsed) continue;
-        if (parsed.error) throw new Error(parsed.error);
-        if (parsed.delta) {
-          content += parsed.delta;
-          onDelta(parsed.delta, content);
+        for (const line of lines) {
+          const parsed = parseOpenAiSseChunk(line);
+          if (!parsed) continue;
+          if (parsed.error) {
+            throw createTransportError('stream_semantic_error', parsed.error);
+          }
+          if (parsed.done) {
+            sawCompletion = true;
+            break;
+          }
+          if (parsed.delta) {
+            content += parsed.delta;
+            onDelta(parsed.delta, content);
+          }
         }
       }
+
+      if (done) break;
     }
 
-    if (done) break;
-  }
-
-  if (buffer.trim()) {
-    const parsed = parseOpenAiSseChunk(buffer.trim());
-    if (parsed?.error) throw new Error(parsed.error);
-    if (parsed?.delta) {
-      content += parsed.delta;
-      onDelta(parsed.delta, content);
+    if (buffer.trim()) {
+      const parsed = parseOpenAiSseChunk(buffer.trim());
+      if (parsed?.error) {
+        throw createTransportError('stream_semantic_error', parsed.error);
+      }
+      if (parsed?.delta) {
+        content += parsed.delta;
+        onDelta(parsed.delta, content);
+      }
+      if (parsed?.done) sawCompletion = true;
     }
+
+    if (!sawCompletion) {
+      throw createTransportError(
+        'stream_protocol_error',
+        'Julia text stream ended without a completion marker'
+      );
+    }
+  } catch (error) {
+    throw classifyTransportError(error, coordinator.abortCode);
+  } finally {
+    clearTimeout(idleTimeout);
+    clearTimeout(totalTimeout);
+    coordinator.disconnectExternalSignal();
+    reader.cancel().catch(() => {});
   }
 
   if (!content.trim()) {
-    throw new Error('Julia text stream completed without assistant content');
+    throw createTransportError(
+      'stream_protocol_error',
+      'Julia text stream completed without assistant content'
+    );
   }
 
   return {

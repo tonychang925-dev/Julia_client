@@ -262,6 +262,7 @@ ipcMain.handle('julia:text:stream', async (event, input) => {
       turnId: input?.turnId,
       type: 'error',
       error: error.message,
+      code: error.code || null,
     });
     throw error;
   }
@@ -300,7 +301,17 @@ app.whenReady().then(async () => {
   const webVoiceUrl = getWebVoiceUrl();
   console.log('[V2_WEB_VOICE_URL]', webVoiceUrl);
   settingsStore = createSettingsStore(app.getPath('userData'));
-  settingsStore.load();
+  try {
+    settingsStore.load();
+  } catch (error) {
+    console.error('[V2_SETTINGS_INVALID]', {
+      file: settingsStore.filePath,
+      message: error.message,
+      code: error.code || null,
+    });
+    app.exit(1);
+    return;
+  }
   console.log('[V2_SETTINGS_STORE]', settingsStore.filePath);
   console.log('[V2_TEXT_API_URL]', getConversationTurnApiTemplate(getTextClientOptions()));
   conversationStore = createConversationStore(app.getPath('userData'));

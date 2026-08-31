@@ -1,5 +1,6 @@
 const fs = require('fs');
 const path = require('path');
+const { normalizeBrainEndpointUrl } = require('./endpoint-policy');
 
 const DEFAULT_FILE_NAME = 'julia-settings-v1.json';
 const DEFAULT_SETTINGS = {
@@ -15,15 +16,7 @@ const DEFAULT_SETTINGS = {
 };
 
 function normalizeBrainEndpoint(value) {
-  const endpoint = String(value || DEFAULT_SETTINGS.brainEndpoint).trim();
-  const parsed = new URL(endpoint);
-  if (!['http:', 'https:'].includes(parsed.protocol)) {
-    throw new Error('Julia Brain endpoint must be http:// or https://');
-  }
-  parsed.pathname = parsed.pathname.replace(/\/+$/, '');
-  parsed.search = '';
-  parsed.hash = '';
-  return parsed.toString().replace(/\/$/, '');
+  return normalizeBrainEndpointUrl(value || DEFAULT_SETTINGS.brainEndpoint);
 }
 
 function normalizeSettings(input = {}) {
