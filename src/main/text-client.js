@@ -106,15 +106,23 @@ async function getConversationDetail(conversationId, options = {}) {
 }
 
 function getTextApiUrl(input, options = {}) {
-  if (process.env.JULIA_TEXT_API_URL) {
-    return buildConversationTurnApiUrl(process.env.JULIA_TEXT_API_URL, input?.conversationId);
-  }
-  return buildConversationTurnApiUrl(options.brainEndpoint, input?.conversationId);
+  return buildConversationTurnApiUrl(resolveTextBrainEndpoint(options), input?.conversationId);
 }
 
 function getConversationTurnApiTemplate(options = {}) {
-  const endpoint = normalizeEndpoint(process.env.JULIA_TEXT_API_URL || options.brainEndpoint);
+  const endpoint = resolveTextBrainEndpoint(options);
   return new URL('/internal/v1/conversations/{conversation_id}/turns', endpoint).toString();
+}
+
+function resolveTextBrainEndpoint(options = {}) {
+  const envOverridePresent = Object.prototype.hasOwnProperty.call(
+    process.env,
+    'JULIA_TEXT_API_URL'
+  );
+  if (envOverridePresent) {
+    return normalizeBrainEndpointUrl(process.env.JULIA_TEXT_API_URL);
+  }
+  return normalizeBrainEndpointUrl(options.brainEndpoint || DEFAULT_BRAIN_ENDPOINT);
 }
 
 function normalizeTurnRequest(input) {

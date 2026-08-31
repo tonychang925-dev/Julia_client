@@ -6,6 +6,7 @@
   "private": true,
   "scripts": {
     "test:client-c1": "node --test tests/client-c1.test.js",
+    "test:client-c1-env-presence": "node --test tests/client-c1-env-presence.test.js",
     "test:client-c1-fetch-authority": "node --test tests/client-c1-fetch-authority.test.js",
     "test:client-c1-redirect": "node --test tests/client-c1-redirect.test.js",
     "test:client-c1-transport": "node --test tests/client-c1-transport.test.js",
