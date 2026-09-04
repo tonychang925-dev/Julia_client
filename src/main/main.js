@@ -208,6 +208,13 @@ ipcMain.handle('julia:text:stream', async (event, input) => {
             content,
           });
         },
+        onProductEvent: (productEvent) => {
+          event.sender.send('julia:text:stream-event', {
+            requestId,
+            type: 'product_event',
+            productEvent,
+          });
+        },
       },
       getTextClientOptions()
     );
@@ -216,6 +223,7 @@ ipcMain.handle('julia:text:stream', async (event, input) => {
       requestId,
       type: 'done',
       content: result.content,
+      ...(result.metadata ? { metadata: result.metadata } : {}),
     });
 
     return result;

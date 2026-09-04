@@ -1,4 +1,5 @@
 const DEFAULT_TEXT_API_URL = 'http://127.0.0.1:18089/v1/chat/completions';
+const { normalizeProductEvent, normalizeProductMetadata } = require('./product-metadata');
 
 function buildTextApiUrl(brainEndpoint) {
   return new URL('/v1/chat/completions', brainEndpoint).toString();
@@ -22,6 +23,23 @@ function assertTextMessage(input) {
   return text;
 }
 
+function readIdentity(input) {
+  const conversationId = input?.conversation_id;
+  const turnId = input?.turn_id;
+
+  if (conversationId !== undefined && (typeof conversationId !== 'string' || !conversationId.trim())) {
+    throw new Error('Conversation ID must be a non-empty string');
+  }
+  if (turnId !== undefined && (typeof turnId !== 'string' || !turnId.trim())) {
+    throw new Error('Turn ID must be a non-empty string');
+  }
+
+  return {
+    ...(conversationId ? { conversation_id: conversationId } : {}),
+    ...(turnId ? { turn_id: turnId } : {}),
+  };
+}
+
 async function sendTextMessage(input, options = {}) {
   const text = assertTextMessage(input);
   const url = getTextApiUrl(options);
@@ -32,6 +50,7 @@ async function sendTextMessage(input, options = {}) {
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
+      ...readIdentity(input),
       model: 'julia-brain',
       stream: false,
       messages: [
@@ -59,6 +78,7 @@ async function sendTextMessage(input, options = {}) {
     content,
     createdAt: new Date().toISOString(),
     source: 'julia-brain-text',
+    ...(data.product ? { metadata: normalizeProductMetadata(data.product) } : {}),
   };
 }
 
@@ -74,9 +94,14 @@ function parseOpenAiSseChunk(line) {
     const data = JSON.parse(payload);
     const delta = data?.choices?.[0]?.delta?.content || '';
     const finishReason = data?.choices?.[0]?.finish_reason || null;
+    const productEvents = data?.product?.events;
     return {
       done: finishReason === 'stop',
       delta,
+      product: data?.product,
+      productEvents: Array.isArray(productEvents)
+        ? productEvents.map(normalizeProductEvent)
+        : undefined,
     };
   } catch (error) {
     return {
@@ -90,6 +115,7 @@ async function streamTextMessage(input, handlers = {}, options = {}) {
   const text = assertTextMessage(input);
   const url = getTextApiUrl(options);
   const onDelta = typeof handlers.onDelta === 'function' ? handlers.onDelta : () => {};
+  const onProductEvent = typeof handlers.onProductEvent === 'function' ? handlers.onProductEvent : () => {};
 
   const response = await fetch(url, {
     method: 'POST',
@@ -97,6 +123,7 @@ async function streamTextMessage(input, handlers = {}, options = {}) {
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
+      ...readIdentity(input),
       model: 'julia-brain',
       stream: true,
       messages: [
@@ -121,6 +148,23 @@ async function streamTextMessage(input, handlers = {}, options = {}) {
   const decoder = new TextDecoder();
   let buffer = '';
   let content = '';
+  let productMetadata = null;
+  const productEvents = [];
+  let researchBrief;
+  let trace;
+
+  const accumulateProductMetadata = (metadata) => {
+    if (!metadata) return;
+    productEvents.push(...metadata.events);
+    if (metadata.research_brief !== undefined) researchBrief = metadata.research_brief;
+    if (metadata.trace !== undefined) trace = metadata.trace;
+    productMetadata = {
+      contract_version: metadata.contract_version,
+      events: productEvents,
+      ...(researchBrief === undefined ? {} : { research_brief: researchBrief }),
+      ...(trace === undefined ? {} : { trace }),
+    };
+  };
 
   while (true) {
     const { done, value } = await reader.read();
@@ -133,6 +177,10 @@ async function streamTextMessage(input, handlers = {}, options = {}) {
         const parsed = parseOpenAiSseChunk(line);
         if (!parsed) continue;
         if (parsed.error) throw new Error(parsed.error);
+        if (parsed.product !== undefined) accumulateProductMetadata(normalizeProductMetadata(parsed.product));
+        if (parsed.productEvents) {
+          for (const productEvent of parsed.productEvents) onProductEvent(productEvent);
+        }
         if (parsed.delta) {
           content += parsed.delta;
           onDelta(parsed.delta, content);
@@ -146,6 +194,9 @@ async function streamTextMessage(input, handlers = {}, options = {}) {
   if (buffer.trim()) {
     const parsed = parseOpenAiSseChunk(buffer.trim());
     if (parsed?.error) throw new Error(parsed.error);
+    if (parsed?.productEvents) {
+      for (const productEvent of parsed.productEvents) onProductEvent(productEvent);
+    }
     if (parsed?.delta) {
       content += parsed.delta;
       onDelta(parsed.delta, content);
@@ -161,6 +212,7 @@ async function streamTextMessage(input, handlers = {}, options = {}) {
     content,
     createdAt: new Date().toISOString(),
     source: 'julia-brain-text-stream',
+    ...(productMetadata ? { metadata: productMetadata } : {}),
   };
 }
 

@@ -376,6 +376,19 @@ function createMessage(role, content, options = {}) {
   bubble.appendChild(renderMessageContent(content));
 
   message.append(roleEl, bubble);
+  if (options.metadata?.research_brief) {
+    message.appendChild(window.JuliaProductProjection.renderResearchBrief(options.metadata.research_brief));
+  }
+  if (options.metadata?.trace) {
+    const trace = document.createElement('details');
+    trace.className = 'research-trace-panel';
+    const summary = document.createElement('summary');
+    summary.textContent = 'Trace';
+    const body = document.createElement('div');
+    body.textContent = JSON.stringify(options.metadata.trace, null, 2);
+    trace.append(summary, body);
+    message.appendChild(trace);
+  }
   return message;
 }
 
@@ -403,7 +416,7 @@ function renderConversationMessages(conversation) {
   }
 
   for (const message of messages) {
-    appendMessage(message.role, message.content);
+    appendMessage(message.role, message.content, { metadata: message.metadata });
   }
 }
 
@@ -614,6 +627,34 @@ function setMessageContent(message, content) {
   thread.scrollTop = thread.scrollHeight;
 }
 
+function setProductStatus(message, productEvent) {
+  const status = window.JuliaProductProjection.renderProductStatus(productEvent);
+  if (!status) return;
+  message.querySelector('.product-status')?.remove();
+  message.appendChild(status);
+}
+
+function setProductMetadata(message, metadata) {
+  if (!metadata) return;
+  window.JuliaProductProjection.validateProductMetadata(metadata);
+  message.querySelector('.research-brief')?.remove();
+  message.querySelector('.research-trace-panel')?.remove();
+
+  if (metadata.research_brief) {
+    message.appendChild(window.JuliaProductProjection.renderResearchBrief(metadata.research_brief));
+  }
+  if (metadata.trace) {
+    const trace = document.createElement('details');
+    trace.className = 'research-trace-panel';
+    const summary = document.createElement('summary');
+    summary.textContent = 'Trace';
+    const body = document.createElement('div');
+    body.textContent = JSON.stringify(metadata.trace, null, 2);
+    trace.append(summary, body);
+    message.appendChild(trace);
+  }
+}
+
 thread.addEventListener('click', async (event) => {
   const button = event.target.closest('.copy-button');
   if (!button) return;
@@ -638,9 +679,20 @@ textClient.onTextStreamEvent((event) => {
     return;
   }
 
+  if (event.type === 'product_event') {
+    setProductStatus(stream.message, event.productEvent);
+    return;
+  }
+
   if (event.type === 'done') {
     stream.content = event.content || stream.content;
     setMessageContent(stream.message, stream.content);
+    try {
+      setProductMetadata(stream.message, event.metadata);
+    } catch (error) {
+      setMessageContent(stream.message, `Structured product metadata failed: ${error.message}`);
+      stream.message.classList.add('error');
+    }
     delete stream.message.dataset.pending;
     activeTextStreams.delete(event.requestId);
     return;
@@ -679,9 +731,18 @@ async function sendComposerMessage() {
     activeConversationId = userRecord.conversation_id;
     await refreshConversationList();
 
-    const response = await textClient.streamTextMessage(requestId, text);
+    const response = await textClient.streamTextMessage(requestId, text, {
+      conversation_id: conversationId,
+      turn_id: requestId,
+    });
     if (activeTextStreams.has(requestId)) {
       setMessageContent(pending, response.content);
+      try {
+        setProductMetadata(pending, response.metadata);
+      } catch (error) {
+        setMessageContent(pending, `Structured product metadata failed: ${error.message}`);
+        pending.classList.add('error');
+      }
       activeTextStreams.delete(requestId);
     }
     await textClient.addConversationMessage(activeConversationId, {
@@ -689,6 +750,7 @@ async function sendComposerMessage() {
       role: 'assistant',
       modality: 'text',
       content: response.content,
+      ...(response.metadata ? { metadata: response.metadata } : {}),
     });
     await refreshConversationList();
     delete pending.dataset.pending;
