@@ -242,6 +242,15 @@ ipcMain.handle('julia:text:stream', async (event, input) => {
             content,
           });
         },
+        onProductEvent: (productEvent) => {
+          event.sender.send('julia:text:stream-event', {
+            requestId,
+            conversationId: productEvent.conversation_id || input?.conversationId,
+            turnId: productEvent.turn_id || input?.turnId,
+            type: 'product_event',
+            productEvent,
+          });
+        },
       },
       getTextClientOptions()
     );
@@ -252,6 +261,7 @@ ipcMain.handle('julia:text:stream', async (event, input) => {
       turnId: result.turn_id,
       type: 'done',
       content: result.content,
+      ...(result.metadata ? { metadata: result.metadata } : {}),
     });
 
     return result;

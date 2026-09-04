@@ -1,5 +1,6 @@
 const { normalizeBrainEndpointUrl } = require('./endpoint-policy');
 const { brainFetch, createTransportError } = require('./brain-fetch');
+const { normalizeProductEvent, normalizeProductMetadata } = require('./product-metadata');
 
 const DEFAULT_BRAIN_ENDPOINT = 'http://127.0.0.1:18089';
 const DEFAULT_REQUEST_TIMEOUT_MS = 30000;
@@ -315,6 +316,7 @@ async function sendTextMessage(input, options = {}) {
     status: data.status || 'completed',
     createdAt: new Date().toISOString(),
     source: 'julia-native-conversation',
+    ...(data?.product !== undefined ? { metadata: normalizeProductMetadata(data.product) } : {}),
   };
 }
 
@@ -334,6 +336,10 @@ function parseOpenAiSseChunk(line) {
       done: finishReason === 'stop',
       delta,
       error: finishReason === 'error' ? (delta || 'Julia conversation turn failed') : null,
+      product: data?.product === undefined ? undefined : normalizeProductMetadata(data.product),
+      productEvents: Array.isArray(data?.productEvents)
+        ? data.productEvents.map(normalizeProductEvent)
+        : undefined,
     };
   } catch (error) {
     return {
@@ -347,6 +353,7 @@ async function streamTextMessage(input, handlers = {}, options = {}) {
   const turn = normalizeTurnRequest(input);
   const url = getTextApiUrl(turn, options);
   const onDelta = typeof handlers.onDelta === 'function' ? handlers.onDelta : () => {};
+  const onProductEvent = typeof handlers.onProductEvent === 'function' ? handlers.onProductEvent : () => {};
   const connectTimeoutMs = resolveTimeoutMs(
     options.connectTimeoutMs ?? options.timeoutMs,
     DEFAULT_REQUEST_TIMEOUT_MS,
@@ -414,6 +421,23 @@ async function streamTextMessage(input, handlers = {}, options = {}) {
   let buffer = '';
   let content = '';
   let sawCompletion = false;
+  let productMetadata = null;
+  const productEvents = [];
+  let researchBrief;
+  let trace;
+  const accumulateProductMetadata = (metadata) => {
+    if (!metadata) return;
+    productEvents.push(...metadata.events);
+    for (const productEvent of metadata.events) onProductEvent(productEvent);
+    if (metadata.research_brief !== undefined) researchBrief = metadata.research_brief;
+    if (metadata.trace !== undefined) trace = metadata.trace;
+    productMetadata = {
+      contract_version: metadata.contract_version,
+      events: [...productEvents],
+      ...(researchBrief === undefined ? {} : { research_brief: researchBrief }),
+      ...(trace === undefined ? {} : { trace }),
+    };
+  };
   resetIdleTimeout();
 
   try {
@@ -430,6 +454,10 @@ async function streamTextMessage(input, handlers = {}, options = {}) {
           if (!parsed) continue;
           if (parsed.error) {
             throw createTransportError('stream_semantic_error', parsed.error);
+          }
+          if (parsed.product !== undefined) accumulateProductMetadata(parsed.product);
+          if (parsed.productEvents) {
+            for (const productEvent of parsed.productEvents) onProductEvent(productEvent);
           }
           if (parsed.done) {
             sawCompletion = true;
@@ -449,6 +477,10 @@ async function streamTextMessage(input, handlers = {}, options = {}) {
       const parsed = parseOpenAiSseChunk(buffer.trim());
       if (parsed?.error) {
         throw createTransportError('stream_semantic_error', parsed.error);
+      }
+      if (parsed?.product !== undefined) accumulateProductMetadata(parsed.product);
+      if (parsed?.productEvents) {
+        for (const productEvent of parsed.productEvents) onProductEvent(productEvent);
       }
       if (parsed?.delta) {
         content += parsed.delta;
@@ -487,6 +519,7 @@ async function streamTextMessage(input, handlers = {}, options = {}) {
     status: 'completed',
     createdAt: new Date().toISOString(),
     source: 'julia-native-conversation-stream',
+    ...(productMetadata ? { metadata: productMetadata } : {}),
   };
 }
 

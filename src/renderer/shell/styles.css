@@ -404,6 +404,62 @@ button, input { font: inherit; }
   border-color: rgba(255, 103, 103, .45);
   background: rgba(255, 103, 103, .08);
 }
+
+.product-status {
+  margin-top: 8px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.product-status[data-capability-status="capability.failed"],
+.product-status[data-capability-status="capability.cancelled"] {
+  color: #ff8f8f;
+}
+
+.research-brief,
+.research-trace-panel {
+  margin-top: 14px;
+  padding: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.research-event-title {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.research-headline {
+  margin-top: 4px;
+  color: #fff;
+  font-size: 17px;
+  font-weight: 650;
+}
+
+.research-section-title {
+  margin-top: 12px;
+  color: var(--muted);
+  font-size: 12px;
+  text-transform: uppercase;
+}
+
+.research-section-body,
+.research-list,
+.research-trace {
+  margin-top: 4px;
+  color: #d9dee8;
+  font-size: 13px;
+  white-space: pre-wrap;
+}
+
+.research-list {
+  padding-left: 18px;
+}
+
+.research-list-item {
+  margin-bottom: 4px;
+}
 .message.failed .role { color: #ff9a9a; }
 .message[data-pending="true"] .bubble,
 .message.pending .bubble { color: var(--muted); }

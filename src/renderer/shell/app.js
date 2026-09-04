@@ -1261,6 +1261,34 @@ function setMessageContent(message, content) {
   thread.scrollTop = thread.scrollHeight;
 }
 
+function setProductStatus(message, productEvent) {
+  const status = window.JuliaProductProjection?.renderProductStatus(productEvent);
+  if (!status) return;
+  message.querySelector('.product-status')?.remove();
+  message.appendChild(status);
+}
+
+function setProductMetadata(message, metadata) {
+  if (!metadata) return;
+  window.JuliaProductProjection.validateProductMetadata(metadata);
+  message.querySelector('.research-brief')?.remove();
+  message.querySelector('.research-trace-panel')?.remove();
+
+  if (metadata.research_brief) {
+    message.appendChild(window.JuliaProductProjection.renderResearchBrief(metadata.research_brief));
+  }
+  if (metadata.trace) {
+    const trace = document.createElement('details');
+    trace.className = 'research-trace-panel';
+    const summary = document.createElement('summary');
+    summary.textContent = 'Trace';
+    const body = document.createElement('div');
+    body.textContent = JSON.stringify(metadata.trace, null, 2);
+    trace.append(summary, body);
+    message.appendChild(trace);
+  }
+}
+
 thread.addEventListener('click', async (event) => {
   const retryButton = event.target.closest('[data-action="retry-message"]');
   if (retryButton) {
@@ -1293,9 +1321,26 @@ textClient.onTextStreamEvent((event) => {
     return;
   }
 
+  if (event.type === 'product_event') {
+    setProductStatus(stream.message, event.productEvent);
+    return;
+  }
+
   if (event.type === 'done') {
     stream.content = event.content || stream.content;
     setMessageContent(stream.message, stream.content);
+    try {
+      setProductMetadata(stream.message, event.metadata);
+    } catch (error) {
+      setMessageContent(stream.message, `Structured product metadata failed: ${error.message}`);
+      applyMessagePresentation(stream.message, 'assistant', 'failed', {
+        modality: 'text',
+        source: 'julia-electron-local',
+        projectionState: 'failed',
+      });
+      activeTextStreams.delete(event.requestId);
+      return;
+    }
     applyMessagePresentation(stream.message, 'assistant', 'completed', {
       modality: 'text',
       source: 'julia-electron-local',
@@ -1339,6 +1384,16 @@ async function executeTextTurn({ conversationId, turnId, text, reason = 'text-tu
 
   if (activeTextStreams.has(turnId)) {
     setMessageContent(pendingAssistant, response.content);
+    try {
+      setProductMetadata(pendingAssistant, response.metadata);
+    } catch (error) {
+      applyMessagePresentation(pendingAssistant, 'assistant', 'failed', {
+        modality: 'text',
+        source: 'julia-electron-local',
+        projectionState: 'failed',
+      });
+      throw error;
+    }
     activeTextStreams.delete(turnId);
   }
   await textClient.addConversationMessage(conversationId, {
