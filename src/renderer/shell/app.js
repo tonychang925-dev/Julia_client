@@ -769,6 +769,17 @@ function createMessage(role, content, options = {}) {
   const bubble = document.createElement('div');
   bubble.className = 'bubble';
   bubble.appendChild(renderMessageContent(content));
+  // A2-R2: attach the structured product (research.brief.v1) when the assistant
+  // message carries one. Rendered as a human-readable brief; never raw JSON as
+  // the primary presentation.
+  if (options.product && typeof options.product === 'object') {
+    message.dataset.hasProduct = '1';
+    const viewModule = window.JuliaResearchProductView;
+    const productView = viewModule && typeof viewModule.renderStructuredProduct === 'function'
+      ? viewModule.renderStructuredProduct(options.product)
+      : null;
+    if (productView) bubble.appendChild(productView);
+  }
 
   const detail = document.createElement('div');
   detail.className = 'message-status-detail hidden';
@@ -856,6 +867,7 @@ function renderConversationMessages(conversation) {
       projectionState: message.metadata?.projection_state,
       source: message.metadata?.source,
       metadata: message.metadata,
+      product: message.product || null,
     });
   }
   // Layer 1: inject voice cache messages (RAM only, dedup by turn_id, timestamp sorted)
@@ -1293,6 +1305,17 @@ textClient.onTextStreamEvent((event) => {
     return;
   }
 
+  if (event.type === 'product') {
+    // A2-R2: realtime structured product (research.brief.v1). Transient only —
+    // canonical authority arrives via Core read-back on sync. Store on the
+    // active stream so the final assistant message can bind it, but never treat
+    // SSE product as canonical truth.
+    if (event.product && typeof event.product === 'object') {
+      stream.product = event.product;
+    }
+    return;
+  }
+
   if (event.type === 'done') {
     stream.content = event.content || stream.content;
     setMessageContent(stream.message, stream.content);
@@ -1324,7 +1347,7 @@ async function executeTextTurn({ conversationId, turnId, text, reason = 'text-tu
     modality: 'text',
     metadata: { source: 'julia-electron-local', projection_state: 'local_pending' },
   });
-  activeTextStreams.set(turnId, { message: pendingAssistant, content: '' });
+  activeTextStreams.set(turnId, { message: pendingAssistant, content: '', product: null });
 
   const response = await textClient.streamTextMessage({
     requestId: turnId,
@@ -1337,10 +1360,16 @@ async function executeTextTurn({ conversationId, turnId, text, reason = 'text-tu
     throw new Error('Julia returned a mismatched conversation turn');
   }
 
-  if (activeTextStreams.has(turnId)) {
+  const streamState = activeTextStreams.get(turnId);
+  if (streamState) {
     setMessageContent(pendingAssistant, response.content);
     activeTextStreams.delete(turnId);
   }
+  // A2-R2: the realtime product (research.brief.v1) from the SSE stream is a
+  // transient hint. Persist it on the local projection only so the UI can show
+  // the structured brief immediately; canonical authority is established by the
+  // following Core sync which may replace/remove it.
+  const realtimeProduct = streamState?.product || response.product || null;
   await textClient.addConversationMessage(conversationId, {
     turn_id: turnId,
     role: 'assistant',
@@ -1351,6 +1380,7 @@ async function executeTextTurn({ conversationId, turnId, text, reason = 'text-tu
       source: 'julia-electron-local',
       projection_state: 'core_returned',
     },
+    ...(realtimeProduct ? { product: realtimeProduct } : {}),
   });
   await syncCanonicalConversation(conversationId, reason);
   delete pendingAssistant.dataset.pending;

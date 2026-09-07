@@ -242,6 +242,15 @@ ipcMain.handle('julia:text:stream', async (event, input) => {
             content,
           });
         },
+        onProduct: (product) => {
+          event.sender.send('julia:text:stream-event', {
+            requestId,
+            conversationId: input?.conversationId,
+            turnId: input?.turnId,
+            type: 'product',
+            product,
+          });
+        },
       },
       getTextClientOptions()
     );

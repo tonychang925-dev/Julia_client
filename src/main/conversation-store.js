@@ -376,6 +376,9 @@ class ConversationStore {
       created_at: message.created_at || timestamp,
       metadata: message.metadata || {},
     };
+    if (message.product && typeof message.product === 'object') {
+      normalized.product = message.product;
+    }
 
     if (!['user', 'assistant'].includes(normalized.role)) {
       throw new Error(`Invalid message role: ${normalized.role}`);
@@ -460,6 +463,12 @@ class ConversationStore {
         created_at: message.created_at || nowIso(),
         metadata: { source: 'julia-core-canonical' },
       };
+      // A2-R2: preserve the canonical structured product (research.brief.v1)
+      // when Core carries it. Core is the authority — if Core omits product,
+      // the projection must not retain one (handled by reconciliation below).
+      if (message.product && typeof message.product === 'object') {
+        normalized.product = message.product;
+      }
       canonicalProjectionKeys.add(`message:${normalized.message_id}`);
       canonicalProjectionKeys.add(`turn-role:${normalized.turn_id}:${normalized.role}`);
 

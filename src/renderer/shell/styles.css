@@ -786,3 +786,70 @@ button, input { font: inherit; }
   border-color: rgba(255, 103, 103, .6);
   background: rgba(255, 103, 103, .12);
 }
+
+/* A2-R2: structured research-brief presentation (research.brief.v1) */
+.structured-product {
+  margin-top: 10px;
+  border: 1px solid rgba(183, 140, 255, .28);
+  border-radius: 10px;
+  background: rgba(183, 140, 255, .05);
+  padding: 4px 2px;
+}
+.structured-product.unsupported {
+  border-color: rgba(255, 255, 255, .18);
+  background: rgba(255, 255, 255, .03);
+}
+.structured-product-tag {
+  font-size: 12px;
+  color: #9aa0b4;
+  padding: 6px 10px;
+}
+.research-brief {
+  font-size: 13px;
+  line-height: 1.6;
+}
+.rb-headline {
+  font-weight: 600;
+  font-size: 15px;
+  color: #e8e6f2;
+  padding: 8px 10px 2px;
+}
+.rb-meta {
+  font-size: 11px;
+  color: #8b8fa3;
+  padding: 0 10px 6px;
+  border-bottom: 1px solid rgba(183, 140, 255, .15);
+  margin-bottom: 4px;
+}
+.rb-section {
+  padding: 5px 10px;
+}
+.rb-section-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: #b78cff;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  margin-bottom: 2px;
+}
+.rb-section-body p {
+  margin: 2px 0;
+}
+.rb-support {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 8px;
+  border: 1px solid currentColor;
+  margin-left: 4px;
+}
+.rb-support.source_verified_support { color: #72e4c0; }
+.rb-support.report_only_lead { color: #e8c877; }
+.rb-support.not_proven_material { color: #ff8181; }
+.rb-support.market_context_only { color: #9aa0b4; }
+.rb-status {
+  font-size: 11px;
+  color: #e8c877;
+  padding: 6px 10px 8px;
+  border-top: 1px solid rgba(183, 140, 255, .15);
+  margin-top: 4px;
+}

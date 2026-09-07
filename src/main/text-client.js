@@ -328,6 +328,12 @@ function parseOpenAiSseChunk(line) {
 
   try {
     const data = JSON.parse(payload);
+    // A2-R2: the native text stream may carry a standalone structured product
+    // frame (research.brief.v1) at the top level (NOT inside choices). Capture
+    // it as a typed event instead of silently dropping it.
+    if (data && typeof data === 'object' && 'product' in data) {
+      return { product: data.product };
+    }
     const delta = data?.choices?.[0]?.delta?.content || '';
     const finishReason = data?.choices?.[0]?.finish_reason || null;
     return {
@@ -347,6 +353,7 @@ async function streamTextMessage(input, handlers = {}, options = {}) {
   const turn = normalizeTurnRequest(input);
   const url = getTextApiUrl(turn, options);
   const onDelta = typeof handlers.onDelta === 'function' ? handlers.onDelta : () => {};
+  const onProduct = typeof handlers.onProduct === 'function' ? handlers.onProduct : () => {};
   const connectTimeoutMs = resolveTimeoutMs(
     options.connectTimeoutMs ?? options.timeoutMs,
     DEFAULT_REQUEST_TIMEOUT_MS,
@@ -413,6 +420,7 @@ async function streamTextMessage(input, handlers = {}, options = {}) {
   const decoder = new TextDecoder();
   let buffer = '';
   let content = '';
+  let product = null;
   let sawCompletion = false;
   resetIdleTimeout();
 
@@ -434,6 +442,18 @@ async function streamTextMessage(input, handlers = {}, options = {}) {
           if (parsed.done) {
             sawCompletion = true;
             break;
+          }
+          if (parsed.product) {
+            // A2-R2: typed structured-product event (research.brief.v1). The
+            // product is realtime delivery only; canonical authority comes from
+            // Core read-back on sync. Unknown products are preserved raw and
+            // surfaced to the caller (renderer decides support) — never
+            // silently dropped.
+            if (!product) {
+              product = parsed.product;
+              onProduct(parsed.product);
+            }
+            continue;
           }
           if (parsed.delta) {
             content += parsed.delta;
@@ -487,6 +507,7 @@ async function streamTextMessage(input, handlers = {}, options = {}) {
     status: 'completed',
     createdAt: new Date().toISOString(),
     source: 'julia-native-conversation-stream',
+    product: product || null,
   };
 }
 
