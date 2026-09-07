@@ -1,12 +1,11 @@
 # Julia Electron Current Authority
 
 STATUS: CANONICAL
-UPDATED: 2026-08-13
+UPDATED: 2026-09-07
 REPOSITORY: Julia_client
 LOCAL PATH: /Users/admin/julia_electron_v2
 ROLE: Electron desktop client / presentation projection for Julia Voice/Text
-AUTHORITATIVE BRANCH: codex/bugfix/electron-c10-c11-projection
-AUTHORITATIVE CODE COMMIT: 4a08967
+AUTHORITATIVE BASE COMMIT FOR THIS RECONCILIATION: 2eed98d9e54394b7de79a2e2c802222354cf8c0a
 SUPERSEDED CC-1 SOURCE CLOSEOUT: 56cac30f3f467d28f9eacca0e4a4b6167038c9d4 (historical)
 
 ## Repository identity
@@ -22,14 +21,14 @@ DO-NOT-USE AS PRODUCTION AUTHORITY:
 - local `/Users/admin/julia_electron`
 - remote `tonychang925-dev/julia_electron`
 
-The old `julia_electron` repository is legacy/historical and must not be used for RMD-3G/RMD-4 production work unless Tony explicitly re-authorizes it.
+The old `julia_electron` repository is legacy/historical and must not be used for production work unless Tony explicitly re-authorizes it.
 
 ## Current production/development status
 
 - Electron connects to S2S `:8765` for realtime Voice.
-- S2S is now production-supervised on AutoDL.
-- Electron should treat S2S startup as potentially long-running and should not classify model cold-start as permanent failure without retry/readiness UX.
-- CC-1 canonical conversation convergence is in force for Electron: Text and Voice attach to the same Core/ConversationRuntime conversation identity.
+- S2S is production-supervised on AutoDL.
+- CC-1 canonical conversation convergence is in force: Text and Voice converge on the same Core/ConversationRuntime conversation identity.
+- Electron local conversation state is projection/display state only; Core/ConversationRuntime is canonical history authority.
 
 ## Authoritative docs
 
@@ -39,6 +38,7 @@ CANONICAL:
 - `docs/contracts/Julia-Conversation-Domain-Contract-v1.md`
 - `docs/adrs/ADR-UI-001-mutually-exclusive-text-voice-surfaces.md`
 - `docs/adrs/ADR-UI-002-voice-microphone-lifecycle.md`
+- `docs/adrs/ADR-CLIENT-C2A-gen2-voice-conversation-contract.md`
 - this file
 
 DERIVED / HISTORICAL AUDIT EVIDENCE:
@@ -46,25 +46,55 @@ DERIVED / HISTORICAL AUDIT EVIDENCE:
 - `docs/audit/*`
 - `docs/e1-validation.md`
 
-## CC-1-C2 bind acknowledgement authority
+## Current Voice conversation contract — gen-2 ACTIVE
 
-STATUS: SOURCE COMMITTED / AWAITING VOICE ARTIFACT + DEPLOYMENT
+STATUS: CURRENT RUNTIME AUTHORITY
 
-C2 Electron source commit:
+The currently deployed/working cross-repository path is:
 
-- `d8ec4e28d178ccb31b361efdfb6dd81d33227d0b`
+1. Electron sends `julia.voice.workspace.bootstrap` with:
+   - canonical `conversationId`
+   - `baseLastMessageId`
+   - `messages[]`
+2. S2S accepts the bootstrap transport but strips/ignores copied `messages[]` for semantic authority.
+3. S2S binds the canonical `conversationId` through `bindCanonicalConversation(conversationId)` and configures realtime session metadata.
+4. S2S sends Brain requests carrying canonical identity metadata including:
+   - `conversation_id`
+   - `voice_trace_id`
+   - `turn_id`
+5. Brain/Core ConversationRuntime owns canonical user/assistant turn persistence.
+6. Electron may display realtime `live-message` data immediately, but that display is non-canonical.
+7. Electron debounces and refreshes from Core; Core truth wins reconciliation.
 
-Required behavior:
+### Important distinction: transport vs semantic authority
 
-- Electron sends `julia.voice.conversation.bind` with canonical `conversationId`.
-- Electron waits for `julia.voice.conversation.bound` ACK.
-- Electron marks `boundVoiceConversationId` only after ACK `conversationId` exactly equals requested C.
-- Electron does not send copied `messages[]` or `baseLastMessageId` to Voice.
+`workspace.bootstrap` is ACTIVE as the current wire/transport contract.
 
+The copied `messages[]` and `baseLastMessageId` are NOT canonical semantic authority. Their presence in the Electron payload must not be interpreted as permission for Voice or Electron to reconstruct, replace, or mint canonical conversation history.
+
+The current S2S implementation enforces this by stripping copied history before canonical binding.
+
+## gen-3 `host.attach` status
+
+STATUS: IMPLEMENTED IN S2S / NOT CURRENT ELECTRON CONTRACT / MIGRATION CANDIDATE
+
+S2S contains a newer hosted protocol based on `julia.voice.host.attach`, but Electron does not currently send `host.attach`.
+
+In S2S `WAIT_HOST_ATTACH` state, a direct legacy `conversation.bind` is rejected until host attachment occurs. Therefore documentation or tests must not instruct current Electron runtime to switch directly to `conversation.bind` without a coordinated gen-3 migration.
+
+A future migration to gen-3 must be treated as an explicit cross-repository protocol migration with coordinated Electron + S2S changes and acceptance evidence. It is not a documentation-only correction and is not required to preserve the currently working gen-2 continuity path.
+
+## Voice flush / external-turn commit status
+
+CURRENT BEHAVIOR:
+
+- S2S `workspace.flush` returns `turns: []` under the current Core-owned persistence model.
+- Electron `commitExternalTurns` is therefore not exercised by the real working Voice loop.
+- `commitExternalTurns` remains a deprecated fail-closed safety fence, not a production persistence authority.
+
+If S2S ever returns non-empty external turns, that would represent a contract change and must fail qualification until explicitly authorized; Electron must not silently promote those turns to Core canonical history.
 
 ## Tunnel lifecycle authority (TUNNEL-L1)
-
-STATUS: SOURCE PACKAGE PENDING DEPLOYMENT / PRODUCTION AUTHORITY AFTER INSTALL
 
 Voice local transport tunnel purpose:
 
@@ -96,21 +126,27 @@ Production lifecycle authority after TUNNEL-L1 install:
 ACTIVE:
 
 - Electron main process / app bootstrap under the current committed source tree
-- active realtime Voice client path that connects to S2S `ws://<host>:8765/v1/realtime`
-- active UI path under `src/`, `app/`, `frontend/`, or project-specific equivalent in this repository
-- CC-1 Voice binding path: Electron sends the active canonical `conversation_id` to Voice and never uploads copied Voice history back to Core
-- Core/ConversationRuntime projection sync: Electron may refresh canonical messages for display, but this is not conversation authority
+- current Electron `workspace.bootstrap` Voice transport
+- S2S canonical `conversation_id` binding into realtime session metadata
+- S2S → Brain request propagation of `conversation_id` / `voice_trace_id` / `turn_id`
+- Brain/Core ConversationRuntime canonical turn persistence
+- Electron canonical conversation sync for projection refresh
+- VOICE-WS-LIFECYCLE-001 frame unload / bounded single-slot handoff handling
 
-LEGACY / RETIREMENT TARGETS:
+NON-AUTHORITATIVE / TRANSITIONAL:
 
-- old workspace/bootstrap semantic authority paths: RETIRED by CC-1; do not reintroduce message snapshot bootstrap into Voice
-- client-owned history authority: RETIRED by CC-1; Electron local cache is display/projection only
-- Voice external-turn commit path: DEPRECATED SAFETY FENCE ONLY; if invoked, it rejects instead of writing `/external-turns`
-- any old LiveKit-only path not referenced by current Voice architecture
+- Electron-copied `messages[]` as semantic history input: NOT AUTHORITY; S2S strips it
+- Electron `baseLastMessageId` as canonical persistence authority: NOT AUTHORITY
+- Electron realtime `live-message` cache: DISPLAY ONLY
+- Electron external-turn commit: DEPRECATED FAIL-CLOSED FENCE
+- gen-3 `host.attach`: FUTURE MIGRATION CANDIDATE, NOT CURRENT ELECTRON RUNTIME CONTRACT
+- client-owned conversation history authority: RETIRED
 
 ## Open remediation items
 
-- RMD-4 will remove any remaining transitional protocol/client authority after RMD-3G LIVE closes.
-- Add explicit S2S STARTING/READY reconnect UX if not already complete.
-- Remove the deprecated `commitExternalTurns` IPC safety fence after all historical callers are proven absent.
-- Keep `.claude-dev/` untracked; it is not production authority.
+1. Reconcile stale Client documentation/tests that still describe direct `conversation.bind` as the current Electron protocol.
+2. Preserve current runtime behavior while doing that reconciliation; no Voice runtime change is authorized by documentation drift alone.
+3. Remove redundant copied bootstrap history only as a separately reviewed cleanup after proving no hidden consumer depends on payload shape; this is not required for current continuity correctness because S2S already strips it.
+4. Decide gen-3 `host.attach` migration separately, with a cross-repository migration plan and acceptance gate.
+5. Remove deprecated `commitExternalTurns` only after all historical callers are proven absent.
+6. Keep `.claude-dev/` untracked; it is not production authority.
