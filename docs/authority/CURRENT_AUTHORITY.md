@@ -1,12 +1,12 @@
 # Julia Electron Current Authority
 
-STATUS: CANONICAL
-UPDATED: 2026-08-13
+STATUS: CANONICAL BASELINE / CLIENT-C2A CUTOVER IN PROGRESS
+UPDATED: 2026-09-07
 REPOSITORY: Julia_client
 LOCAL PATH: /Users/admin/julia_electron_v2
 ROLE: Electron desktop client / presentation projection for Julia Voice/Text
-AUTHORITATIVE BRANCH: codex/bugfix/electron-c10-c11-projection
-AUTHORITATIVE CODE COMMIT: 4a08967
+AUTHORITATIVE BASELINE: glm-d/julia-client-c1-transport-hardening @ 2eed98d
+CLIENT-C2A IMPLEMENTATION BRANCH: client-c2a-voice-authority-cutover
 SUPERSEDED CC-1 SOURCE CLOSEOUT: 56cac30f3f467d28f9eacca0e4a4b6167038c9d4 (historical)
 
 ## Repository identity
@@ -22,14 +22,16 @@ DO-NOT-USE AS PRODUCTION AUTHORITY:
 - local `/Users/admin/julia_electron`
 - remote `tonychang925-dev/julia_electron`
 
-The old `julia_electron` repository is legacy/historical and must not be used for RMD-3G/RMD-4 production work unless Tony explicitly re-authorizes it.
+The old `julia_electron` repository is legacy/historical and must not be used for production continuity work unless Tony explicitly re-authorizes it.
 
 ## Current production/development status
 
 - Electron connects to S2S `:8765` for realtime Voice.
-- S2S is now production-supervised on AutoDL.
-- Electron should treat S2S startup as potentially long-running and should not classify model cold-start as permanent failure without retry/readiness UX.
-- CC-1 canonical conversation convergence is in force for Electron: Text and Voice attach to the same Core/ConversationRuntime conversation identity.
+- S2S is production-supervised on AutoDL.
+- CC-1 canonical conversation convergence is in force: Text and Voice attach to one Core/ConversationRuntime conversation identity.
+- Text C1 is Core-first and uses Julia-native conversation endpoints.
+- Electron local conversation state is a disposable presentation projection, never cognition/history authority.
+- Phase 5 Voice authority is direct S2S → Brain → Core semantic persistence; Electron is control-plane + projection only.
 
 ## Authoritative docs
 
@@ -39,6 +41,7 @@ CANONICAL:
 - `docs/contracts/Julia-Conversation-Domain-Contract-v1.md`
 - `docs/adrs/ADR-UI-001-mutually-exclusive-text-voice-surfaces.md`
 - `docs/adrs/ADR-UI-002-voice-microphone-lifecycle.md`
+- `docs/adrs/ADR-CLIENT-C2A-voice-authority-cutover.md`
 - this file
 
 DERIVED / HISTORICAL AUDIT EVIDENCE:
@@ -46,25 +49,44 @@ DERIVED / HISTORICAL AUDIT EVIDENCE:
 - `docs/audit/*`
 - `docs/e1-validation.md`
 
-## CC-1-C2 bind acknowledgement authority
+## CLIENT-C2A / CC-1 Voice authority
 
-STATUS: SOURCE COMMITTED / AWAITING VOICE ARTIFACT + DEPLOYMENT
+STATUS: PHASE 5 AUTHORITY PROVEN / ELECTRON CUTOVER IN PROGRESS
 
-C2 Electron source commit:
+### Canonical semantic path
 
-- `d8ec4e28d178ccb31b361efdfb6dd81d33227d0b`
+```text
+Electron canonical conversation_id
+→ Voice host attach / bind ACK
+→ S2S session metadata
+→ S2S Brain request {conversation_id, turn_id, modality=voice}
+→ Core ConversationRuntime
+→ canonical ConversationMessage persistence
+```
 
-Required behavior:
+The deployed-authorized Phase 5 Voice source has already retired shadow semantic turns: completed Voice semantic turns live in Core; Voice workspace delta export is empty; workspace bootstrap/flush are compatibility handlers rather than canonical persistence authority.
 
-- Electron sends `julia.voice.conversation.bind` with canonical `conversationId`.
-- Electron waits for `julia.voice.conversation.bound` ACK.
-- Electron marks `boundVoiceConversationId` only after ACK `conversationId` exactly equals requested C.
-- Electron does not send copied `messages[]` or `baseLastMessageId` to Voice.
+### Required Electron behavior
 
+- Electron sends `julia.voice.host.attach` with protocol `julia-electron-v2` and canonical `conversationId`.
+- Electron waits for the resulting positive bind acknowledgement.
+- Electron marks `boundVoiceConversationId` only after ACK `conversationId` exactly equals the requested conversation.
+- Electron does not send copied `messages[]`, `history`, `external_history`, or `baseLastMessageId` to Voice.
+- Electron does not commit completed Voice semantic turns back to Core.
+- Electron may refresh its disposable projection from Core after Voice events/mode transitions.
+
+### Retired semantic paths
+
+The following are not canonical Electron authority:
+
+- `julia.voice.workspace.bootstrap` with conversation-history snapshot
+- `julia.voice.workspace.flush` as semantic persistence
+- Electron `commitExternalTurns` as a Voice commit mechanism
+- client-owned or iframe-owned durable conversation history
+
+The `commitExternalTurns` implementation may remain temporarily as an unreachable fail-closed safety fence until exposure-minimality cleanup, but no production renderer path may invoke it.
 
 ## Tunnel lifecycle authority (TUNNEL-L1)
-
-STATUS: SOURCE PACKAGE PENDING DEPLOYMENT / PRODUCTION AUTHORITY AFTER INSTALL
 
 Voice local transport tunnel purpose:
 
@@ -93,24 +115,30 @@ Production lifecycle authority after TUNNEL-L1 install:
 
 ## Current production code paths
 
-ACTIVE:
+ACTIVE / REQUIRED:
 
 - Electron main process / app bootstrap under the current committed source tree
 - active realtime Voice client path that connects to S2S `ws://<host>:8765/v1/realtime`
-- active UI path under `src/`, `app/`, `frontend/`, or project-specific equivalent in this repository
-- CC-1 Voice binding path: Electron sends the active canonical `conversation_id` to Voice and never uploads copied Voice history back to Core
-- Core/ConversationRuntime projection sync: Electron may refresh canonical messages for display, but this is not conversation authority
+- active UI path under `src/renderer/shell`
+- Text path → Brain native conversation endpoints → Core ConversationRuntime
+- Voice identity transport → S2S → Brain → Core ConversationRuntime
+- Core/ConversationRuntime projection sync for display only
+- VOICE-WS-LIFECYCLE-001 frame release / bounded single-slot handoff handling
 
 LEGACY / RETIREMENT TARGETS:
 
-- old workspace/bootstrap semantic authority paths: RETIRED by CC-1; do not reintroduce message snapshot bootstrap into Voice
-- client-owned history authority: RETIRED by CC-1; Electron local cache is display/projection only
-- Voice external-turn commit path: DEPRECATED SAFETY FENCE ONLY; if invoked, it rejects instead of writing `/external-turns`
-- any old LiveKit-only path not referenced by current Voice architecture
+- workspace/bootstrap semantic history snapshot
+- workspace/flush semantic commit semantics
+- client-owned history authority
+- Voice external-turn commit surface
+- unrelated old Voice paths not referenced by the current architecture
 
 ## Open remediation items
 
-- RMD-4 will remove any remaining transitional protocol/client authority after RMD-3G LIVE closes.
-- Add explicit S2S STARTING/READY reconnect UX if not already complete.
-- Remove the deprecated `commitExternalTurns` IPC safety fence after all historical callers are proven absent.
+- CLIENT-C2A: cut Electron runtime from workspace bootstrap/flush semantics to Phase 5 ID-only host attach/bind.
+- CLIENT-C2A: make the stale Voice authority tests match the proven Phase 5 contract without weakening them.
+- CLIENT-C2C: run Text ↔ Voice continuity E2E after C2A qualification.
+- CLIENT-C2D: remove unreachable transitional/dead IPC surfaces after absence of callers is proven.
+- Security hardening (CSP, Voice URL scope, plaintext projection cache, single-instance) remains separate from continuity authority closure.
+- Diary wiring remains out of scope for C2A.
 - Keep `.claude-dev/` untracked; it is not production authority.
