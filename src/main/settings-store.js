@@ -1,11 +1,12 @@
 const fs = require('fs');
 const path = require('path');
+const { normalizeBrainEndpoint } = require('./runtime-profile');
 
 const DEFAULT_FILE_NAME = 'julia-settings-v1.json';
 const DEFAULT_SETTINGS = {
   version: 1,
   defaultMode: 'text',
-  brainEndpoint: 'http://127.0.0.1:18089',
+  brainEndpoint: null,
   closeBehavior: 'tray',
   launchAtLogin: false,
   windowRestore: true,
@@ -13,18 +14,6 @@ const DEFAULT_SETTINGS = {
   globalShortcut: 'CommandOrControl+Shift+J',
   windowState: null,
 };
-
-function normalizeBrainEndpoint(value) {
-  const endpoint = String(value || DEFAULT_SETTINGS.brainEndpoint).trim();
-  const parsed = new URL(endpoint);
-  if (!['http:', 'https:'].includes(parsed.protocol)) {
-    throw new Error('Julia Brain endpoint must be http:// or https://');
-  }
-  parsed.pathname = parsed.pathname.replace(/\/+$/, '');
-  parsed.search = '';
-  parsed.hash = '';
-  return parsed.toString().replace(/\/$/, '');
-}
 
 function normalizeSettings(input = {}) {
   const merged = {
