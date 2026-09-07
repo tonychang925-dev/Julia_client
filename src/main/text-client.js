@@ -4,8 +4,23 @@ const { brainFetch, createTransportError } = require('./brain-fetch');
 const DEFAULT_BRAIN_ENDPOINT = 'http://127.0.0.1:18089';
 const DEFAULT_REQUEST_TIMEOUT_MS = 30000;
 const MAX_REQUEST_TIMEOUT_MS = 60000;
-const DEFAULT_STREAM_IDLE_TIMEOUT_MS = 30000;
-const MAX_STREAM_IDLE_TIMEOUT_MS = 60000;
+
+// CLIENT-TEXT-E2E-A2-R3 (Defect A): stream liveness budget.
+// A valid Research Desk turn emits NO SSE bytes between POST acceptance and the
+// final streamed Julia text (the C2 preliminary-judgment provider call is a
+// synchronous chat bounded by a 60 s provider timeout). The backend therefore
+// never keeps a LIVE turn silent beyond ~60 s before either bytes or a typed
+// terminal SSE error frame arrives. The idle budget must exceed that governed
+// ceiling with margin, or a healthy slow research turn is aborted as if dead:
+//   30 s (old) < 60 s ceiling  → structurally invalid.
+//   120 s (new) = 2 × 60 s ceiling (covers worst sequential pre-stream silence
+//   D1 acquisition ≤20 s + C2 judgment ≤60 s = ~80 s with margin).
+// Connect (transport establishment) and total (whole turn) stay distinct and
+// finite: 30 s connect, 300 s total. A true stall (no bytes at all) still
+// fails via idle at 120 s, and a slow-drip pathological stream still fails via
+// the finite 300 s total.
+const DEFAULT_STREAM_IDLE_TIMEOUT_MS = 120000;
+const MAX_STREAM_IDLE_TIMEOUT_MS = 180000;
 const DEFAULT_STREAM_TOTAL_TIMEOUT_MS = 300000;
 const MAX_STREAM_TOTAL_TIMEOUT_MS = 300000;
 
