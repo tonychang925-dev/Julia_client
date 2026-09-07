@@ -1,0 +1,139 @@
+diff --git a/src/renderer/shell/app.js b/src/renderer/shell/app.js
+--- a/src/renderer/shell/app.js
++++ b/src/renderer/shell/app.js
+@@
+-// session. Leaving Voice for Text fully unloads the voice frame so its S2S
+-// realtime slot is released server-side; returning to Voice re-loads and
+-// re-bootstraps a fresh session. This eliminates the single-slot handoff race
++// session. Leaving Voice for Text fully unloads the voice frame so its S2S
++// realtime slot is released server-side; returning to Voice re-loads and
++// re-binds a fresh session. This eliminates the single-slot handoff race
+ // (1008 on rapid conversation switch) instead of masking it with retries.
+@@
+ async function bindVoiceConversation(conversationId = activeConversationId) {
+   const targetId = String(conversationId || '').trim();
+   if (!targetId) throw new Error('No active conversation for Voice');
+   if (boundVoiceConversationId === targetId && voiceWorkspaceSessionId) return { conversationId: targetId, reused: true };
+   await syncCanonicalConversation(targetId, 'voice-bind');
+-  const synced = await textClient.syncConversationMessages(targetId);
+-  const canonical = synced.canonical;
+-  if (!canonical || canonical.conversation_id !== targetId) {
+-    throw new Error('Canonical conversation bootstrap mismatch');
+-  }
+-  setVoiceLifecycleStatus('Loading conversation into Voice…', 'bootstrapping');
+-  // AT-20B: S2S single-slot release race. Frontend close() is fire-and-forget
+-  // (does not await server unregister), so a fast conversation switch can hit
+-  // `1008 All session slots are in use` in the ~36ms handoff window. Retry only
+-  // that transient error with escalating backoff; everything else fails fast.
++  setVoiceLifecycleStatus('Binding Voice to Core conversation…', 'bootstrapping');
++  // CLIENT-C2A: Electron transports identity only. Voice/S2S propagates the
++  // canonical conversation_id and turn_id to Brain; Core owns semantic history.
++  // Keep the bounded 1008 handoff handling from VOICE-WS-LIFECYCLE-001.
+   const MAX_RETRIES = 3;
+   const RETRY_DELAYS = [300, 700, 1500];
+-  let result;
++  let ack;
+   for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
++    const requestId = createRequestId();
++    const message = {
++      source: 'julia-electron-v2',
++      type: 'julia.voice.host.attach',
++      requestId,
++      protocol: 'julia-electron-v2',
++      conversationId: targetId,
++    };
+     try {
+-      result = await sendVoiceWorkspaceRequest('julia.voice.workspace.bootstrap', {
+-        conversationId: targetId,
+-        baseLastMessageId: canonical.last_message_id || '',
+-        messages: canonical.messages || [],
+-      }, 30000);
++      ack = await new Promise((resolve, reject) => {
++        const timeout = setTimeout(() => {
++          pendingVoiceCommands.delete(requestId);
++          reject(new Error(`Voice conversation bind timed out: ${targetId}`));
++        }, 30000);
++        pendingVoiceCommands.set(requestId, { resolve, reject, timeout });
++        voiceFrame.contentWindow.postMessage(message, getVoiceTargetOrigin());
++      });
++      if (!ack?.ok) throw new Error(ack?.error || 'Voice conversation bind failed');
++      if (String(ack.conversationId || '').trim() !== targetId) {
++        throw new Error(`Voice bind acknowledged another conversation: ${ack.conversationId || 'missing'} != ${targetId}`);
++      }
+       break;
+     } catch (err) {
+       const msg = err?.message || String(err);
+       const isSlotRace = /1008|All session slots are in use/i.test(msg);
+       if (!isSlotRace || attempt === MAX_RETRIES) throw err;
+       setVoiceLifecycleStatus(`Voice handoff race — retrying (${attempt}/${MAX_RETRIES})…`, 'bootstrapping');
+       await new Promise((resolve) => setTimeout(resolve, RETRY_DELAYS[attempt - 1]));
+     }
+   }
+-  if (result.conversationId !== targetId) throw new Error('Voice bootstrap acknowledged another conversation');
+   boundVoiceConversationId = targetId;
+-  voiceWorkspaceSessionId = result.voiceSessionId;
++  voiceWorkspaceSessionId = ack.voiceSessionId;
+   setVoiceLifecycleStatus('Voice bound to Core conversation. Microphone is off.', 'idle');
+   return { conversationId: targetId, acknowledged: true };
+ }
+@@
+ async function flushVoiceWorkspace(reason = 'text') {
+-  if (!boundVoiceConversationId || !voiceWorkspaceSessionId) return { empty: true };
++  // CLIENT-C2A: compatibility name retained until exposure cleanup. This is
++  // projection refresh only — Voice semantic persistence already happened via
++  // S2S → Brain → Core ConversationRuntime.
++  if (!boundVoiceConversationId) return { empty: true, canonical: true };
+   const conversationId = boundVoiceConversationId;
+   if (conversationId !== activeConversationId) throw new Error('Voice workspace is bound to another conversation');
+-  setVoiceLifecycleStatus(`Saving Voice conversation for ${reason}…`, 'flushing');
+-  const delta = await sendVoiceWorkspaceRequest('julia.voice.workspace.flush', { conversationId }, 30000);
+-  if (delta.conversationId !== conversationId || delta.voiceSessionId !== voiceWorkspaceSessionId) {
+-    throw new Error('Voice workspace delta identity mismatch');
+-  }
+-  const turns = Array.isArray(delta.turns) ? delta.turns : [];
+-  if (turns.length) {
+-    await textClient.commitExternalTurns({
+-      conversationId,
+-      voiceSessionId: delta.voiceSessionId,
+-      baseLastMessageId: delta.baseLastMessageId || '',
+-      turns,
+-    });
+-  }
+-  voiceFrame.contentWindow.postMessage({
+-    source: 'julia-electron-v2',
+-    type: 'julia.voice.workspace.committed',
+-    conversationId,
+-    voiceSessionId: delta.voiceSessionId,
+-    committedTurnIds: turns.map(t => t.turn_id),
+-    baseLastMessageId: delta.baseLastMessageId || '',
+-  }, getVoiceTargetOrigin());
+-  await syncCanonicalConversation(conversationId, `voice-flush:${reason}`);
+-  setVoiceLifecycleStatus('Voice conversation saved. Microphone is off.', 'idle');
+-  return { empty: turns.length === 0 };
++  setVoiceLifecycleStatus(`Syncing Voice conversation from Core for ${reason}…`, 'flushing');
++  await syncCanonicalConversation(conversationId, `voice-core-sync:${reason}`);
++  setVoiceLifecycleStatus('Voice conversation synced from Core. Microphone is off.', 'idle');
++  return { empty: true, canonical: true };
+ }
+
+diff --git a/tests/client-c1.test.js b/tests/client-c1.test.js
+--- a/tests/client-c1.test.js
++++ b/tests/client-c1.test.js
+@@
+-  assert.match(handlerSource, /'julia:conversation:current'[\s\S]*?getCurrentCoreConversationProjection\(\)/);
++  assert.match(handlerSource, /'julia:conversation:current'[\s\S]*?ensureCurrentCoreConversation\(\)/);
+@@
+-  assert.match(bindSource, /type: 'julia\.voice\.conversation\.bind'/);
++  assert.match(bindSource, /type: 'julia\.voice\.host\.attach'/);
++  assert.match(bindSource, /protocol: 'julia-electron-v2'/);
+   assert.match(bindSource, /pendingVoiceCommands\.set\(requestId, \{ resolve, reject, timeout \}\)/);
+-  assert.match(bindSource, /const ack = await new Promise/);
++  assert.match(bindSource, /ack = await new Promise/);
+   assert.match(bindSource, /if \(!ack\?\.ok\) throw new Error/);
+   assert.match(bindSource, /ack\.conversationId[\s\S]*!== targetId/);
+   assert.match(bindSource, /boundVoiceConversationId = targetId/);
+-  assert.ok(bindSource.indexOf('const ack = await new Promise') < bindSource.indexOf('boundVoiceConversationId = targetId'));
++  assert.ok(bindSource.indexOf('ack = await new Promise') < bindSource.indexOf('boundVoiceConversationId = targetId'));
+   assert.doesNotMatch(bindSource, /messages\s*:/);
+   assert.doesNotMatch(bindSource, /baseLastMessageId/);
+ });
