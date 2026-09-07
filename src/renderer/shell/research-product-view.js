@@ -1,9 +1,24 @@
 'use strict';
-/* A2-R2 structured-product view for research.brief.v1.
+/* A2-R2 / A2-R4 structured-product view.
  *
- * Pure DOM builder. Dispatch is by explicit product type/schema_version — never
- * by prose parsing. Presentation-only: no fabricated fields, no trading
+ * Pure DOM builder. Dispatch is by explicit product type/contract_version —
+ * never by prose parsing. Presentation-only: no fabricated fields, no trading
  * guidance, no promotion of transient product to canonical authority.
+ *
+ * R4 canonical-product envelope dispatch:
+ *   The canonical product Core persists for a research turn is the FULL
+ *   envelope `julia.product.events.v1` (contract_version, events[],
+ *   trace{conversation,turn}, research_brief{research.brief.v1}). The Client
+ *   keeps that envelope as message.product (no flattening). This view only
+ *   selects the correct PRESENTATION:
+ *     - direct research.brief.v1            → renderResearchBrief (backward
+ *                                             compatible, R2 path)
+ *     - julia.product.events.v1 envelope    → validate, select nested
+ *                                             research_brief, delegate to the
+ *                                             SAME renderResearchBrief
+ *     - unknown / missing / wrong-version   → controlled unsupported state,
+ *                                             never synthesized from events[]
+ *                                             or assistant prose
  *
  * UMD wrapper mirrors voice-ux-state.js so the same file works under Node
  * (node --test) and as a classic renderer <script> that exposes
@@ -17,6 +32,9 @@
   root.JuliaResearchProductView = factory();
 })(typeof globalThis !== 'undefined' ? globalThis : window, () => {
 
+const JULIA_PRODUCT_EVENTS_V1 = 'julia.product.events.v1';
+const RESEARCH_BRIEF_V1 = 'research.brief.v1';
+
 function el(tagName, text) {
   const node = document.createElement(tagName);
   if (text !== undefined && text !== null) node.textContent = String(text);
@@ -26,11 +44,33 @@ function el(tagName, text) {
 function isResearchBrief(product) {
   const type = product && (product.product_type || product.contract_version);
   const version = product && (product.schema_version || product.contract_version);
-  return (
-    type === 'research.brief.v1' ||
-    version === 'research.brief.v1' ||
-    (product && product.headline && product.contract_version === 'research.brief.v1')
+  return Boolean(
+    type === RESEARCH_BRIEF_V1 ||
+    version === RESEARCH_BRIEF_V1 ||
+    (product && product.headline && product.contract_version === RESEARCH_BRIEF_V1)
   );
+}
+
+// Exact top-level envelope contract detection — no substring guessing.
+function isJuliaProductEventsEnvelope(product) {
+  return Boolean(
+    product &&
+    typeof product === 'object' &&
+    product.contract_version === JULIA_PRODUCT_EVENTS_V1
+  );
+}
+
+// Controlled unsupported / non-brief presentation. Never a synthetic brief.
+function renderUnsupported(product, labelVersion) {
+  const wrap = el('div', null);
+  wrap.className = 'structured-product';
+  wrap.className += ' unsupported';
+  const tag = el('div', null);
+  tag.className = 'structured-product-tag';
+  const version = labelVersion || (product && (product.schema_version || product.contract_version));
+  tag.textContent = `结构化产品（暂不支持渲染）: ${version || 'unknown'}`;
+  wrap.appendChild(tag);
+  return wrap;
 }
 
 function addSection(container, title, renderFn) {
@@ -44,18 +84,13 @@ function addSection(container, title, renderFn) {
   container.appendChild(section);
 }
 
+// The ONE research.brief.v1 renderer (R2). Envelope dispatch delegates here.
 function renderResearchBrief(product) {
   const wrap = el('div', null);
   wrap.className = 'structured-product';
 
   if (!isResearchBrief(product)) {
-    wrap.className += ' unsupported';
-    const tag = el('div', null);
-    tag.className = 'structured-product-tag';
-    const version = product && (product.schema_version || product.contract_version);
-    tag.textContent = `结构化产品（暂不支持渲染）: ${version || 'unknown'}`;
-    wrap.appendChild(tag);
-    return wrap;
+    return renderUnsupported(product);
   }
 
   const container = el('div', null);
@@ -146,9 +181,57 @@ function renderResearchBrief(product) {
   return wrap;
 }
 
+// R4: julia.product.events.v1 envelope dispatch (R4 §10-14, §19).
+// Validates the KNOWN envelope contract, selects the nested renderable
+// research.brief.v1, and delegates to the single existing brief renderer.
+// It never alters the canonical payload, never reaches the network, never
+// rebuilds a judgment, never parses assistant prose, and never invents
+// missing product fields.
+function renderJuliaProductEventsEnvelope(envelope) {
+  // Recognized top-level contract.
+  if (!isJuliaProductEventsEnvelope(envelope)) {
+    return renderUnsupported(envelope);
+  }
+  const nested = envelope.research_brief;
+  // A valid envelope without a research_brief is a controlled non-brief state.
+  if (!nested || typeof nested !== 'object') {
+    return renderUnsupported(
+      { contract_version: envelope.contract_version },
+      `${JULIA_PRODUCT_EVENTS_V1}（未含可渲染研究简报）`
+    );
+  }
+  // Only a recognized research.brief.v1 nested product is delegated to the
+  // brief renderer. Wrong/unknown nested schema → controlled unsupported, no
+  // guessing, no synthesis.
+  if (!isResearchBrief(nested)) {
+    const nestedVersion = nested.contract_version || nested.schema_version || 'unknown';
+    return renderUnsupported(
+      { contract_version: envelope.contract_version },
+      `${JULIA_PRODUCT_EVENTS_V1} → 内嵌 ${nestedVersion}`
+    );
+  }
+  return renderResearchBrief(nested);
+}
+
+// R4 top-level presentation dispatch (R4 §9, §52).
+// Direct research.brief.v1 stays renderable (backward compatible, R2 path);
+// the real canonical julia.product.events.v1 envelope selects its nested
+// research_brief for view; anything else is a controlled unsupported state.
+function renderStructuredProduct(product) {
+  if (isResearchBrief(product)) {
+    return renderResearchBrief(product);
+  }
+  if (isJuliaProductEventsEnvelope(product)) {
+    return renderJuliaProductEventsEnvelope(product);
+  }
+  return renderUnsupported(product);
+}
+
   return {
-    renderStructuredProduct: renderResearchBrief,
+    renderStructuredProduct,
     renderResearchBrief,
+    renderJuliaProductEventsEnvelope,
     isResearchBrief,
+    isJuliaProductEventsEnvelope,
   };
 });

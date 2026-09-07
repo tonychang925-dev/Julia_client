@@ -1,0 +1,184 @@
+{
+ "contract_version": "julia.product.events.v1",
+ "events": [
+  {
+   "type": "capability.completed"
+  },
+  {
+   "type": "capability.completed"
+  },
+  {
+   "type": "capability.completed"
+  }
+ ],
+ "research_brief": {
+  "contract_version": "research.brief.v1",
+  "brief_id": "brief_0487c2da44f33cdb1a4a48f067bbbb429b16afb7b35b1d3ebb4c454e05782603",
+  "event_title": "【阿里Token Plan个人版发布，Qwen3.8-Max预览版同步上线】刚刚",
+  "headline": "Preliminary: 初步判断：阿里发布Token Plan个人版及Qwen3.8-Max-Preview，属于产品发布事件，对相关主题（Token出海）可能带来积极影响，但需进一步验证市场反应。.",
+  "executive_summary": [
+   "Preliminary research judgment: 初步判断：阿里发布Token Plan个人版及Qwen3.8-Max-Preview，属于产品发布事件，对相关主题（Token出海）可能带来积极影响，但需进一步验证市场反应。",
+   "Primary C2 driver: 阿里发布Token Plan个人版及Qwen3.8-Max-Preview，参数达2.4T，性能出色，正式版将开源。",
+   "Primary uncertainty: 事件对相关主题（Token出海）的实际影响程度尚不明确。",
+   "C2 supplied no contradiction."
+  ],
+  "what_happened": "阿里发布Token Plan个人版及Qwen3.8-Max-Preview，参数达2.4T，性能出色，正式版将开源。",
+  "why_it_matters": [
+   "阿里发布Token Plan个人版及Qwen3.8-Max-Preview，可能提升其在AI及Token服务领域的竞争力。"
+  ],
+  "key_drivers": [
+   {
+    "driver_id": "driver_1",
+    "statement": "阿里发布Token Plan个人版及Qwen3.8-Max-Preview，参数达2.4T，性能出色，正式版将开源。",
+    "support_level": "MARKET_CONTEXT_ONLY",
+    "display_label": "Market-context inference",
+    "evidence_refs": [],
+    "source_record_refs": []
+   }
+  ],
+  "evidence_snapshot": {
+   "drivers": [
+    {
+     "driver_id": "driver_1",
+     "statement": "阿里发布Token Plan个人版及Qwen3.8-Max-Preview，参数达2.4T，性能出色，正式版将开源。",
+     "support_level": "MARKET_CONTEXT_ONLY",
+     "display_label": "Market-context inference",
+     "evidence_refs": [],
+     "source_record_refs": []
+    }
+   ],
+   "judgment_evidence_refs": [
+    "ev_research_1788766870098536000",
+    "ev_research_1788766870098669000",
+    "ev_research_1788766870098711000",
+    "ev_research_1788766870098741000",
+    "ev_research_1788766870098899000",
+    "ev_research_1788766870098937000",
+    "ev_research_1788766870098966000",
+    "ev_research_1788766870098994000",
+    "ev_research_1788766870099020000",
+    "ev_research_1788766870099046000",
+    "ev_research_1788766870099069000"
+   ],
+   "judgment_source_record_refs": [
+    "src_1265fba81c7ce1e967afa198e33af19dc5f4585826f60394590f7a207787d715",
+    "src_3b53fa82fa8193bf61e0438d46df7cf7bff5f8d99e7552bb6da55792b9a10376",
+    "src_821f69df6af271daab51c3c316d6a3c77afd14c3dde60d8cb4a0b15dbed0c467",
+    "src_2f3039e9ac4387bf3b487a6a8a6870be361609d1e4ffac0a8a276e8368b845a8",
+    "src_f2a606a31be11c04e98715fd0eac28316f7f4dab543a3bc1eb1eac323e75ce7e",
+    "src_b44ecf632026b69e6f9c98c0b8c1f6ef904c74674e298d26121afde882227dbb",
+    "src_18e01f799911183f88df05d2039d456185ddc27d5ce4c1573ef20098d5bdff55",
+    "src_4c2b7d359073b0be776852e8ff87530492d5bbc5ddd56e7b82df89360fed6a7c",
+    "src_6a007e59b899449da8b9ebc9445c26d94b51be9c8e1cc121292ee67689eae908",
+    "src_09486b2acc5bc1b224090168593cd4c5dd41215fe6f3ea8fd88d98bcf83831d4",
+    "src_c052fa977e4a393d955950945aaef7f228696a085f556fea724962a1213864d7"
+   ],
+   "display_note": "C2 support classifications are preserved; B1 does not mint evidence states."
+  },
+  "contradictions": [],
+  "uncertainties": [
+   "事件对相关主题（Token出海）的实际影响程度尚不明确。",
+   "市场对产品发布的具体反应（如用户接受度、竞争格局变化）有待观察。",
+   "事件是否会被市场解读为重大利好存在不确定性。",
+   "NO_MODEL_SYNTHESIS: No model semantic synthesis is contracted by research.bridge.v1"
+  ],
+  "what_to_watch": [
+   "Watch: 阿里发布Token Plan个人版及Qwen3.8-Max-Preview，可能提升其在AI及Token服务领域的竞争力。",
+   "Watch for clarity on: 事件对相关主题（Token出海）的实际影响程度尚不明确。",
+   "Watch for clarity on: 市场对产品发布的具体反应（如用户接受度、竞争格局变化）有待观察。",
+   "Watch for clarity on: 事件是否会被市场解读为重大利好存在不确定性。",
+   "Watch for clarity on: NO_MODEL_SYNTHESIS: No model semantic synthesis is contracted by research.bridge.v1",
+   "Composition retains this C2 limit: Julia的初步判断基于市场上下文，与来源观察分离，不构成交易建议。",
+   "Composition retains this C2 limit: 本判断仅为初步研究，未经过深度验证，需进一步分析。",
+   "Composition retains this C2 limit: only preliminary research judgment",
+   "Composition retains this C2 limit: source observation is not objective truth",
+   "Composition retains this C2 limit: search completeness not proven",
+   "Composition retains this C2 limit: external factual correctness not proven",
+   "Composition retains this C2 limit: freshness not proven"
+  ],
+  "confidence": 0.2,
+  "confidence_display": "20.0%",
+  "reasoning_limits": [
+   "Julia的初步判断基于市场上下文，与来源观察分离，不构成交易建议。",
+   "本判断仅为初步研究，未经过深度验证，需进一步分析。",
+   "only preliminary research judgment",
+   "source observation is not objective truth",
+   "search completeness not proven",
+   "external factual correctness not proven",
+   "freshness not proven"
+  ],
+  "source_refs": [
+   "src_1265fba81c7ce1e967afa198e33af19dc5f4585826f60394590f7a207787d715",
+   "src_3b53fa82fa8193bf61e0438d46df7cf7bff5f8d99e7552bb6da55792b9a10376",
+   "src_821f69df6af271daab51c3c316d6a3c77afd14c3dde60d8cb4a0b15dbed0c467",
+   "src_2f3039e9ac4387bf3b487a6a8a6870be361609d1e4ffac0a8a276e8368b845a8",
+   "src_f2a606a31be11c04e98715fd0eac28316f7f4dab543a3bc1eb1eac323e75ce7e",
+   "src_b44ecf632026b69e6f9c98c0b8c1f6ef904c74674e298d26121afde882227dbb",
+   "src_18e01f799911183f88df05d2039d456185ddc27d5ce4c1573ef20098d5bdff55",
+   "src_4c2b7d359073b0be776852e8ff87530492d5bbc5ddd56e7b82df89360fed6a7c",
+   "src_6a007e59b899449da8b9ebc9445c26d94b51be9c8e1cc121292ee67689eae908",
+   "src_09486b2acc5bc1b224090168593cd4c5dd41215fe6f3ea8fd88d98bcf83831d4",
+   "src_c052fa977e4a393d955950945aaef7f228696a085f556fea724962a1213864d7"
+  ],
+  "trace": {
+   "brief_id": "brief_0487c2da44f33cdb1a4a48f067bbbb429b16afb7b35b1d3ebb4c454e05782603",
+   "judgment_id": "judgment_9edc8b5c41194a91aaf7d494c3fe3899",
+   "market_event_id": 215257,
+   "capability_request_id": "cap_req_1788766841700938000",
+   "capability_call_id": "cap_call_1788766841703015000",
+   "correlation_id": "conv:conv_02e70cd874ca43fda8790ac79db51989:turn:d0d75a18-a8a6-4023-a7f4-59f77c40bdd5",
+   "evidence_refs": [
+    "ev_research_1788766870098536000",
+    "ev_research_1788766870098669000",
+    "ev_research_1788766870098711000",
+    "ev_research_1788766870098741000",
+    "ev_research_1788766870098899000",
+    "ev_research_1788766870098937000",
+    "ev_research_1788766870098966000",
+    "ev_research_1788766870098994000",
+    "ev_research_1788766870099020000",
+    "ev_research_1788766870099046000",
+    "ev_research_1788766870099069000"
+   ],
+   "source_record_refs": [
+    "src_1265fba81c7ce1e967afa198e33af19dc5f4585826f60394590f7a207787d715",
+    "src_3b53fa82fa8193bf61e0438d46df7cf7bff5f8d99e7552bb6da55792b9a10376",
+    "src_821f69df6af271daab51c3c316d6a3c77afd14c3dde60d8cb4a0b15dbed0c467",
+    "src_2f3039e9ac4387bf3b487a6a8a6870be361609d1e4ffac0a8a276e8368b845a8",
+    "src_f2a606a31be11c04e98715fd0eac28316f7f4dab543a3bc1eb1eac323e75ce7e",
+    "src_b44ecf632026b69e6f9c98c0b8c1f6ef904c74674e298d26121afde882227dbb",
+    "src_18e01f799911183f88df05d2039d456185ddc27d5ce4c1573ef20098d5bdff55",
+    "src_4c2b7d359073b0be776852e8ff87530492d5bbc5ddd56e7b82df89360fed6a7c",
+    "src_6a007e59b899449da8b9ebc9445c26d94b51be9c8e1cc121292ee67689eae908",
+    "src_09486b2acc5bc1b224090168593cd4c5dd41215fe6f3ea8fd88d98bcf83831d4",
+    "src_c052fa977e4a393d955950945aaef7f228696a085f556fea724962a1213864d7"
+   ]
+  },
+  "composition_metadata": {
+   "composition_id": "brief_composition_0487c2da44f33cdb1a4a48f067bbbb429b16afb7b35b1d3ebb4c454e05782603",
+   "judgment_contract_version": "research.preliminary_judgment.v1",
+   "event_occurred_at": "2026-07-19T18:46:35.697877+08:00",
+   "theme_relation_labels": [],
+   "evidence_display_metadata": {},
+   "source_display_metadata": {},
+   "deterministic_composition": true
+  }
+ },
+ "trace": {
+  "conversation_id": "conv_02e70cd874ca43fda8790ac79db51989",
+  "turn_id": "d0d75a18-a8a6-4023-a7f4-59f77c40bdd5",
+  "correlation_id": "conv:conv_02e70cd874ca43fda8790ac79db51989:turn:d0d75a18-a8a6-4023-a7f4-59f77c40bdd5",
+  "capability_request_ids": [
+   "cap_req_1788766840891775000",
+   "cap_req_1788766841331013000",
+   "cap_req_1788766841700938000"
+  ],
+  "capability_call_ids": [
+   "cap_call_1788766840893578000",
+   "cap_call_1788766841331557000",
+   "cap_call_1788766841703015000"
+  ],
+  "judgment_id": "judgment_9edc8b5c41194a91aaf7d494c3fe3899",
+  "brief_id": "brief_0487c2da44f33cdb1a4a48f067bbbb429b16afb7b35b1d3ebb4c454e05782603"
+ }
+}
