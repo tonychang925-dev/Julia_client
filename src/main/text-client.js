@@ -343,6 +343,9 @@ function parseOpenAiSseChunk(line) {
 
   try {
     const data = JSON.parse(payload);
+    if (data && typeof data === 'object' && data.error && typeof data.error === 'object') {
+      return { error: data.error };
+    }
     // A2-R2: the native text stream may carry a standalone structured product
     // frame (research.brief.v1) at the top level (NOT inside choices). Capture
     // it as a typed event instead of silently dropping it.
@@ -362,6 +365,19 @@ function parseOpenAiSseChunk(line) {
       error: `Invalid Julia text stream chunk: ${error.message}`,
     };
   }
+}
+
+function createStreamSemanticError(error) {
+  if (typeof error === 'string') {
+    return createTransportError('stream_semantic_error', error);
+  }
+  const transportError = createTransportError(
+    'stream_semantic_error',
+    error?.message || 'Julia conversation turn failed'
+  );
+  if (error?.type) transportError.serverErrorType = error.type;
+  if (error?.code) transportError.serverErrorCode = error.code;
+  return transportError;
 }
 
 async function streamTextMessage(input, handlers = {}, options = {}) {
@@ -452,7 +468,7 @@ async function streamTextMessage(input, handlers = {}, options = {}) {
           const parsed = parseOpenAiSseChunk(line);
           if (!parsed) continue;
           if (parsed.error) {
-            throw createTransportError('stream_semantic_error', parsed.error);
+            throw createStreamSemanticError(parsed.error);
           }
           if (parsed.done) {
             sawCompletion = true;
@@ -483,7 +499,7 @@ async function streamTextMessage(input, handlers = {}, options = {}) {
     if (buffer.trim()) {
       const parsed = parseOpenAiSseChunk(buffer.trim());
       if (parsed?.error) {
-        throw createTransportError('stream_semantic_error', parsed.error);
+        throw createStreamSemanticError(parsed.error);
       }
       if (parsed?.delta) {
         content += parsed.delta;

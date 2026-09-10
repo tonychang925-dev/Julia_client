@@ -10,6 +10,7 @@ const {
 } = require('../src/main/endpoint-policy');
 const { SettingsStore } = require('../src/main/settings-store');
 const {
+  parseOpenAiSseChunk,
   buildConversationTurnApiUrl,
   getConversationTurnApiTemplate,
   sendTextMessage,
@@ -305,6 +306,58 @@ test('C1-TO SSE semantic error stays a semantic error', async () => {
   } finally {
     await stopServer(server);
   }
+});
+
+test('C1-TO top-level SSE error is terminal without DONE', async () => {
+  const server = await startServer((_request, response) => {
+    response.writeHead(200, { 'Content-Type': 'text/event-stream' });
+    response.end(
+      'event: error\n'
+      + 'data: {"error":{"message":"Core turn execution failed","type":"core_execution_error","code":"core_execution_failed"}}\n\n'
+    );
+  });
+  const deltas = [];
+  try {
+    const error = await assertFailure(
+      streamTextMessage({
+        conversationId: 'conv-A', turnId: 'turn-core-error', input: 'hello',
+      }, { onDelta: (delta) => deltas.push(delta) }, {
+        brainEndpoint: `http://127.0.0.1:${server.address().port}`,
+      }),
+      'stream_semantic_error',
+      (caught) => caught.serverErrorType === 'core_execution_error'
+        && caught.serverErrorCode === 'core_execution_failed'
+        && caught.message === 'Core turn execution failed'
+        && !caught.message.includes('completion marker')
+    );
+    assert.deepEqual(deltas, []);
+    assert.equal(error.serverErrorCode, 'core_execution_failed');
+  } finally {
+    await stopServer(server);
+  }
+});
+
+test('C1-SSE parser recognizes product and top-level error distinctly', () => {
+  const product = { type: 'research.brief.v1', data: {} };
+  assert.deepEqual(
+    parseOpenAiSseChunk('data: ' + JSON.stringify({ product })).product,
+    product
+  );
+  const parsed = parseOpenAiSseChunk(
+    'data: ' + JSON.stringify({
+      error: {
+        message: 'Core turn execution failed',
+        type: 'core_execution_error',
+        code: 'core_execution_failed',
+      },
+    })
+  );
+  assert.equal(parsed.delta, undefined);
+  assert.deepEqual(parsed.error, {
+    message: 'Core turn execution failed',
+    type: 'core_execution_error',
+    code: 'core_execution_failed',
+  });
 });
 
 test('C1-TO missing SSE completion marker is a protocol error', async () => {
