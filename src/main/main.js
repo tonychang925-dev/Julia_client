@@ -195,6 +195,8 @@ ipcMain.handle('julia:text:send', async (_event, input) => {
 
 ipcMain.handle('julia:text:stream', async (event, input) => {
   const requestId = String(input?.requestId || '');
+  const ipcInvocationId = `${requestId}:ipc:1`;
+  console.info('[MIRA_CORRELATION]', JSON.stringify({ root_id: input?.correlation?.root_id, renderer_event_id: input?.correlation?.renderer_event_id, ipc_invocation_id: ipcInvocationId, webContents_id: event.sender.id, renderer_pid: event.sender.getOSProcessId?.() }));
 
   try {
     const result = await streamTextMessage(

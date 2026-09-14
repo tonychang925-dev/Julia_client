@@ -114,6 +114,10 @@ function parseOpenAiSseChunk(line) {
 async function streamTextMessage(input, handlers = {}, options = {}) {
   const text = assertTextMessage(input);
   const url = getTextApiUrl(options);
+  const rootId = input?.correlation?.root_id || input?.requestId || `text_${Date.now()}`;
+  const textClientCallId = `${rootId}:text-client:1`;
+  const httpRequestId = `${rootId}:http:1`;
+  console.info('[MIRA_CORRELATION]', JSON.stringify({ root_id: rootId, text_client_call_id: textClientCallId, http_request_id: httpRequestId }));
   const onDelta = typeof handlers.onDelta === 'function' ? handlers.onDelta : () => {};
   const onProductEvent = typeof handlers.onProductEvent === 'function' ? handlers.onProductEvent : () => {};
 
@@ -121,6 +125,9 @@ async function streamTextMessage(input, handlers = {}, options = {}) {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
+      'X-Mira-Root-Correlation-Id': rootId,
+      'X-Mira-Text-Client-Call-Id': textClientCallId,
+      'X-Mira-Http-Request-Id': httpRequestId,
     },
     body: JSON.stringify({
       ...readIdentity(input),
