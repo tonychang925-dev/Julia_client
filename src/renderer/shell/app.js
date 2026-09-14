@@ -132,8 +132,6 @@ async function sendVoiceLifecycleCommand(action, timeoutMs = 7000) {
   ensureVoiceLoaded();
   await waitForVoiceFrameReady();
   const requestId = createRequestId();
-  const correlation = { root_id: requestId, renderer_event_id: `${requestId}:renderer:1` };
-  console.info('[MIRA_CORRELATION]', JSON.stringify({ ...correlation, event: 'submit' }));
   const message = {
     source: 'julia-electron-v2',
     type: 'voice:lifecycle-command',
@@ -715,6 +713,8 @@ async function sendComposerMessage() {
   if (!text) return;
 
   const requestId = createRequestId();
+  const correlation = { root_id: requestId, renderer_event_id: `${requestId}:renderer:1` };
+  console.info('[MIRA_CORRELATION]', JSON.stringify({ ...correlation, event: 'composer-submit' }));
   composerInput.value = '';
   const userMessage = appendMessage('user', text);
   thread.querySelector('.empty-thread')?.remove();
