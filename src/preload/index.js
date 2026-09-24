@@ -8,11 +8,15 @@ contextBridge.exposeInMainWorld('juliaElectronV2', {
     turnId,
     text,
   }),
-  streamTextMessage: (requestId, conversationId, text) => ipcRenderer.invoke('julia:text:stream', {
-    requestId,
-    conversationId,
-    text,
-  }),
+  streamTextMessage: (requestId, conversationId, text) => {
+    const turnId = requestId;
+    return ipcRenderer.invoke('julia:text:stream', {
+      requestId,
+      turnId,
+      conversationId,
+      text,
+    });
+  },
   onTextStreamEvent: (callback) => {
     const handler = (_event, payload) => callback(payload);
     ipcRenderer.on('julia:text:stream-event', handler);

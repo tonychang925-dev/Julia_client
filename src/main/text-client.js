@@ -26,13 +26,44 @@ function assertTextMessage(input) {
   return { conversationId, turnId, text };
 }
 
-function assertConversationTurnEcho(data, turn) {
-  if (data?.conversation_id && data.conversation_id !== turn.conversationId) {
-    throw new Error(`Julia conversation mismatch: ${data.conversation_id} != ${turn.conversationId}`);
+function createIdentityEchoError(code, message) {
+  const error = new Error(message);
+  error.code = code;
+  return error;
+}
+
+function verifyConversationTurnEcho(data, turn) {
+  if (!data || typeof data !== 'object') return false;
+
+  const hasConversationEcho = Object.prototype.hasOwnProperty.call(data, 'conversation_id');
+  const hasTurnEcho = Object.prototype.hasOwnProperty.call(data, 'turn_id');
+  if (!hasConversationEcho && !hasTurnEcho) return false;
+
+  if (!hasConversationEcho) {
+    throw createIdentityEchoError(
+      'missing_conversation_echo',
+      'Julia response did not echo conversation_id'
+    );
   }
-  if (data?.turn_id && data.turn_id !== turn.turnId) {
-    throw new Error(`Julia turn mismatch: ${data.turn_id} != ${turn.turnId}`);
+  if (data.conversation_id !== turn.conversationId) {
+    throw createIdentityEchoError(
+      'conversation_echo_mismatch',
+      `Julia conversation mismatch: ${data.conversation_id} != ${turn.conversationId}`
+    );
   }
+  if (!hasTurnEcho) {
+    throw createIdentityEchoError(
+      'missing_turn_echo',
+      'Julia response did not echo turn_id'
+    );
+  }
+  if (data.turn_id !== turn.turnId) {
+    throw createIdentityEchoError(
+      'turn_echo_mismatch',
+      `Julia turn mismatch: ${data.turn_id} != ${turn.turnId}`
+    );
+  }
+  return true;
 }
 
 function createStreamSemanticError(error) {
@@ -78,7 +109,12 @@ async function sendTextMessage(input, options = {}) {
   }
 
   const data = await response.json();
-  assertConversationTurnEcho(data, turn);
+  if (!verifyConversationTurnEcho(data, turn)) {
+    throw createIdentityEchoError(
+      'missing_conversation_echo',
+      'Julia response did not echo conversation_id'
+    );
+  }
   const content = data?.choices?.[0]?.message?.content;
   if (typeof content !== 'string' || !content.trim()) {
     throw new Error('Julia text response did not contain assistant content');
@@ -159,6 +195,8 @@ async function streamTextMessage(input, handlers = {}, options = {}) {
   const decoder = new TextDecoder();
   let buffer = '';
   let content = '';
+  let sawCompletion = false;
+  let sawAuthoritativeIdentityEcho = false;
 
   while (true) {
     const { done, value } = await reader.read();
@@ -170,8 +208,11 @@ async function streamTextMessage(input, handlers = {}, options = {}) {
       for (const line of lines) {
         const parsed = parseOpenAiSseChunk(line);
         if (!parsed) continue;
-        assertConversationTurnEcho(parsed.data, turn);
+        if (verifyConversationTurnEcho(parsed.data, turn)) {
+          sawAuthoritativeIdentityEcho = true;
+        }
         if (parsed.error) throw createStreamSemanticError(parsed.error);
+        if (parsed.done) sawCompletion = true;
         if (parsed.delta) {
           content += parsed.delta;
           onDelta(parsed.delta, content);
@@ -184,12 +225,28 @@ async function streamTextMessage(input, handlers = {}, options = {}) {
 
   if (buffer.trim()) {
     const parsed = parseOpenAiSseChunk(buffer.trim());
-    assertConversationTurnEcho(parsed?.data, turn);
+    if (verifyConversationTurnEcho(parsed?.data, turn)) {
+      sawAuthoritativeIdentityEcho = true;
+    }
     if (parsed?.error) throw createStreamSemanticError(parsed.error);
+    if (parsed?.done) sawCompletion = true;
     if (parsed?.delta) {
       content += parsed.delta;
       onDelta(parsed.delta, content);
     }
+  }
+
+  if (!sawAuthoritativeIdentityEcho) {
+    throw createIdentityEchoError(
+      'missing_conversation_echo',
+      'Julia stream did not provide an authoritative conversation identity echo'
+    );
+  }
+
+  if (!sawCompletion) {
+    const protocolError = new Error('Julia text stream ended without a completion marker');
+    protocolError.code = 'stream_protocol_error';
+    throw protocolError;
   }
 
   if (!content.trim()) {

@@ -195,6 +195,9 @@ ipcMain.handle('julia:text:send', async (_event, input) => {
 
 ipcMain.handle('julia:text:stream', async (event, input) => {
   const requestId = String(input?.requestId || '');
+  if (input?.turnId !== input?.requestId) {
+    throw new Error('Request and turn identity mismatch');
+  }
 
   try {
     const result = await streamTextMessage(
