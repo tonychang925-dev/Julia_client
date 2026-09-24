@@ -224,6 +224,9 @@ ipcMain.handle('julia:text:stream', async (event, input) => {
       requestId,
       type: 'error',
       error: error.message,
+      code: error.code,
+      serverErrorType: error.serverErrorType,
+      serverErrorCode: error.serverErrorCode,
     });
     throw error;
   }

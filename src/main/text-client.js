@@ -15,15 +15,42 @@ function assertTextMessage(input) {
     throw new Error('Text request must be an object');
   }
 
+  const conversationId = String(input.conversationId || '').trim();
+  const turnId = String(input.turnId || '').trim();
   const text = String(input.text || '').trim();
+  if (!conversationId) throw new Error('Conversation ID is required');
+  if (!turnId) throw new Error('Turn ID is required');
   if (!text) throw new Error('Text message is empty');
   if (text.length > 8000) throw new Error('Text message is too long');
 
-  return text;
+  return { conversationId, turnId, text };
+}
+
+function assertConversationTurnEcho(data, turn) {
+  if (data?.conversation_id && data.conversation_id !== turn.conversationId) {
+    throw new Error(`Julia conversation mismatch: ${data.conversation_id} != ${turn.conversationId}`);
+  }
+  if (data?.turn_id && data.turn_id !== turn.turnId) {
+    throw new Error(`Julia turn mismatch: ${data.turn_id} != ${turn.turnId}`);
+  }
+}
+
+function createStreamSemanticError(error) {
+  if (typeof error === 'string') {
+    const stringError = new Error(error);
+    stringError.code = 'stream_semantic_error';
+    return stringError;
+  }
+
+  const semanticError = new Error(error?.message || 'Julia conversation turn failed');
+  semanticError.code = 'stream_semantic_error';
+  if (error?.type) semanticError.serverErrorType = error.type;
+  if (error?.code) semanticError.serverErrorCode = error.code;
+  return semanticError;
 }
 
 async function sendTextMessage(input, options = {}) {
-  const text = assertTextMessage(input);
+  const turn = assertTextMessage(input);
   const url = getTextApiUrl(options);
 
   const response = await fetch(url, {
@@ -33,11 +60,13 @@ async function sendTextMessage(input, options = {}) {
     },
     body: JSON.stringify({
       model: 'julia-brain',
+      conversation_id: turn.conversationId,
+      turn_id: turn.turnId,
       stream: false,
       messages: [
         {
           role: 'user',
-          content: text,
+          content: turn.text,
         },
       ],
     }),
@@ -49,12 +78,15 @@ async function sendTextMessage(input, options = {}) {
   }
 
   const data = await response.json();
+  assertConversationTurnEcho(data, turn);
   const content = data?.choices?.[0]?.message?.content;
   if (typeof content !== 'string' || !content.trim()) {
     throw new Error('Julia text response did not contain assistant content');
   }
 
   return {
+    conversation_id: turn.conversationId,
+    turn_id: turn.turnId,
     role: 'assistant',
     content,
     createdAt: new Date().toISOString(),
@@ -72,9 +104,13 @@ function parseOpenAiSseChunk(line) {
 
   try {
     const data = JSON.parse(payload);
+    if (data && typeof data === 'object' && data.error && typeof data.error === 'object') {
+      return { error: data.error };
+    }
     const delta = data?.choices?.[0]?.delta?.content || '';
     const finishReason = data?.choices?.[0]?.finish_reason || null;
     return {
+      data,
       done: finishReason === 'stop',
       delta,
     };
@@ -87,7 +123,7 @@ function parseOpenAiSseChunk(line) {
 }
 
 async function streamTextMessage(input, handlers = {}, options = {}) {
-  const text = assertTextMessage(input);
+  const turn = assertTextMessage(input);
   const url = getTextApiUrl(options);
   const onDelta = typeof handlers.onDelta === 'function' ? handlers.onDelta : () => {};
 
@@ -98,11 +134,13 @@ async function streamTextMessage(input, handlers = {}, options = {}) {
     },
     body: JSON.stringify({
       model: 'julia-brain',
+      conversation_id: turn.conversationId,
+      turn_id: turn.turnId,
       stream: true,
       messages: [
         {
           role: 'user',
-          content: text,
+          content: turn.text,
         },
       ],
     }),
@@ -132,7 +170,8 @@ async function streamTextMessage(input, handlers = {}, options = {}) {
       for (const line of lines) {
         const parsed = parseOpenAiSseChunk(line);
         if (!parsed) continue;
-        if (parsed.error) throw new Error(parsed.error);
+        assertConversationTurnEcho(parsed.data, turn);
+        if (parsed.error) throw createStreamSemanticError(parsed.error);
         if (parsed.delta) {
           content += parsed.delta;
           onDelta(parsed.delta, content);
@@ -145,7 +184,8 @@ async function streamTextMessage(input, handlers = {}, options = {}) {
 
   if (buffer.trim()) {
     const parsed = parseOpenAiSseChunk(buffer.trim());
-    if (parsed?.error) throw new Error(parsed.error);
+    assertConversationTurnEcho(parsed?.data, turn);
+    if (parsed?.error) throw createStreamSemanticError(parsed.error);
     if (parsed?.delta) {
       content += parsed.delta;
       onDelta(parsed.delta, content);
@@ -157,6 +197,8 @@ async function streamTextMessage(input, handlers = {}, options = {}) {
   }
 
   return {
+    conversation_id: turn.conversationId,
+    turn_id: turn.turnId,
     role: 'assistant',
     content,
     createdAt: new Date().toISOString(),
@@ -170,4 +212,5 @@ module.exports = {
   getTextApiUrl,
   sendTextMessage,
   streamTextMessage,
+  parseOpenAiSseChunk,
 };

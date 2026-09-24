@@ -647,7 +647,8 @@ textClient.onTextStreamEvent((event) => {
   }
 
   if (event.type === 'error') {
-    setMessageContent(stream.message, `Text mode request failed: ${event.error}`);
+    const failureCode = event.code ? ` (${event.code})` : '';
+    setMessageContent(stream.message, `Text mode request failed: ${event.error}${failureCode}`);
     stream.message.classList.add('error');
     delete stream.message.dataset.pending;
     activeTextStreams.delete(event.requestId);
@@ -668,8 +669,9 @@ async function sendComposerMessage() {
   activeTextStreams.set(requestId, { message: pending, content: '' });
   setComposerBusy(true);
 
+  let conversationId = null;
   try {
-    const conversationId = await ensureActiveConversation();
+    conversationId = await ensureActiveConversation();
     const userRecord = await textClient.addConversationMessage(conversationId, {
       turn_id: requestId,
       role: 'user',
@@ -679,7 +681,10 @@ async function sendComposerMessage() {
     activeConversationId = userRecord.conversation_id;
     await refreshConversationList();
 
-    const response = await textClient.streamTextMessage(requestId, text);
+    const response = await textClient.streamTextMessage(requestId, conversationId, text);
+    if (response.conversation_id !== conversationId || response.turn_id !== requestId) {
+      throw new Error('Julia returned a mismatched conversation turn');
+    }
     if (activeTextStreams.has(requestId)) {
       setMessageContent(pending, response.content);
       activeTextStreams.delete(requestId);
