@@ -343,6 +343,46 @@ function parseOpenAiSseChunk(line) {
   }
 }
 
+function parseJuliaNativeSseChunk(eventName, line) {
+  if (!eventName || !line.startsWith('data:')) return null;
+
+  const payload = line.slice(5).trim();
+  if (!payload) return null;
+
+  let data;
+  try {
+    data = JSON.parse(payload);
+  } catch (error) {
+    return {
+      done: false,
+      error: `Invalid Julia native stream chunk: ${error.message}`,
+    };
+  }
+
+  if (eventName === 'assistant.text.delta') {
+    return {
+      done: false,
+      delta: typeof data?.text === 'string' ? data.text : '',
+    };
+  }
+
+  if (eventName === 'response.done') {
+    const status = String(data?.status || '').toLowerCase();
+    return status === 'completed'
+      ? { done: true, delta: '' }
+      : { done: false, error: `Julia conversation turn ended with status: ${status || 'unknown'}` };
+  }
+
+  if (eventName === 'response.failed') {
+    return {
+      done: false,
+      error: data?.error_code || 'Julia conversation turn failed',
+    };
+  }
+
+  return { done: false, delta: '' };
+}
+
 async function streamTextMessage(input, handlers = {}, options = {}) {
   const turn = normalizeTurnRequest(input);
   const url = getTextApiUrl(turn, options);
@@ -414,6 +454,7 @@ async function streamTextMessage(input, handlers = {}, options = {}) {
   let buffer = '';
   let content = '';
   let sawCompletion = false;
+  let currentEvent = '';
   resetIdleTimeout();
 
   try {
@@ -426,8 +467,16 @@ async function streamTextMessage(input, handlers = {}, options = {}) {
         buffer = lines.pop() || '';
 
         for (const line of lines) {
-          const parsed = parseOpenAiSseChunk(line);
+          if (line.startsWith('event:')) {
+            currentEvent = line.slice(6).trim();
+            continue;
+          }
+
+          const parsed = currentEvent
+            ? parseJuliaNativeSseChunk(currentEvent, line)
+            : parseOpenAiSseChunk(line);
           if (!parsed) continue;
+          if (line.startsWith('data:')) currentEvent = '';
           if (parsed.error) {
             throw createTransportError('stream_semantic_error', parsed.error);
           }
@@ -559,6 +608,7 @@ module.exports = {
   getTextApiUrl,
   normalizeTurnRequest,
   parseOpenAiSseChunk,
+  parseJuliaNativeSseChunk,
   sendTextMessage,
   streamTextMessage,
 };
