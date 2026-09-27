@@ -348,6 +348,35 @@ test('C1-TO external abort is distinct from timeout', async () => {
   }
 });
 
+test('C1-SSE accepts Julia-native typed delta and response.done completion frames', async () => {
+  const server = await startServer((_request, response) => {
+    response.writeHead(200, { 'Content-Type': 'text/event-stream' });
+    response.end(
+      'event: response.created\ndata: {"response_id":"resp-native","turn_id":"turn-native","interruptible":true}\n\n'
+      + 'event: assistant.text.delta\ndata: {"response_id":"resp-native","seq":1,"text":"Julia ","interruptible":true}\n\n'
+      + 'event: assistant.text.delta\ndata: {"response_id":"resp-native","seq":2,"text":"continues","interruptible":true}\n\n'
+      + 'event: assistant.text.done\ndata: {"response_id":"resp-native"}\n\n'
+      + 'event: response.done\ndata: {"response_id":"resp-native","status":"completed"}\n\n'
+    );
+  });
+  const deltas = [];
+  try {
+    const result = await streamTextMessage({
+      conversationId: 'conv-A', turnId: 'turn-native', input: 'continue',
+    }, { onDelta: (delta) => deltas.push(delta) }, {
+      brainEndpoint: `http://127.0.0.1:${server.address().port}`,
+      connectTimeoutMs: 5000,
+      streamIdleTimeoutMs: 5000,
+      streamTotalTimeoutMs: 10000,
+    });
+    assert.deepEqual(deltas, ['Julia ', 'continues']);
+    assert.equal(result.content, 'Julia continues');
+    assert.equal(result.status, 'completed');
+  } finally {
+    await stopServer(server);
+  }
+});
+
 test('C1-SSE preserves ordered deltas, completion, and correlation with tightened timeouts', async () => {
   const server = await startServer((_request, response) => {
     response.writeHead(200, { 'Content-Type': 'text/event-stream' });
