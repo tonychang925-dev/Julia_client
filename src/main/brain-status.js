@@ -1,9 +1,26 @@
+const { resolveBrainEndpoint } = require('./runtime-profile');
+
 function buildBrainHealthUrl(brainEndpoint) {
   return new URL('/internal/v1/voice/health', brainEndpoint).toString();
 }
 
 async function getBrainStatus(brainEndpoint, timeoutMs = 2500) {
-  const healthUrl = buildBrainHealthUrl(brainEndpoint);
+  let binding;
+  try {
+    binding = resolveBrainEndpoint(brainEndpoint);
+  } catch (error) {
+    return {
+      connected: false,
+      endpoint: null,
+      healthUrl: null,
+      status: 'not_configured',
+      error: error.message,
+      error_code: error.code || 'JULIA_BRAIN_BINDING_FAILED',
+      checked_at: new Date().toISOString(),
+    };
+  }
+
+  const healthUrl = buildBrainHealthUrl(binding.endpoint);
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
@@ -16,7 +33,9 @@ async function getBrainStatus(brainEndpoint, timeoutMs = 2500) {
     if (!response.ok) {
       return {
         connected: false,
-        endpoint: brainEndpoint,
+        endpoint: binding.endpoint,
+        endpoint_source: binding.source,
+        runtime_profile: binding.profile,
         healthUrl,
         status: 'offline',
         error: `HTTP ${response.status}`,
@@ -27,7 +46,9 @@ async function getBrainStatus(brainEndpoint, timeoutMs = 2500) {
     const data = await response.json();
     return {
       connected: data?.status === 'ok',
-      endpoint: brainEndpoint,
+      endpoint: binding.endpoint,
+      endpoint_source: binding.source,
+      runtime_profile: binding.profile,
       healthUrl,
       status: data?.status || 'unknown',
       contract_version: data?.contract_version || null,
@@ -37,7 +58,9 @@ async function getBrainStatus(brainEndpoint, timeoutMs = 2500) {
   } catch (error) {
     return {
       connected: false,
-      endpoint: brainEndpoint,
+      endpoint: binding.endpoint,
+      endpoint_source: binding.source,
+      runtime_profile: binding.profile,
       healthUrl,
       status: 'offline',
       error: error.name === 'AbortError' ? 'timeout' : error.message,

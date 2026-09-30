@@ -1,13 +1,20 @@
-const DEFAULT_TEXT_API_URL = 'http://127.0.0.1:18089/v1/chat/completions';
+const { resolveBrainEndpoint } = require('./runtime-profile');
 
 function buildTextApiUrl(brainEndpoint) {
   return new URL('/v1/chat/completions', brainEndpoint).toString();
 }
 
 function getTextApiUrl(options = {}) {
-  if (process.env.JULIA_TEXT_API_URL) return process.env.JULIA_TEXT_API_URL;
-  if (options.brainEndpoint) return buildTextApiUrl(options.brainEndpoint);
-  return DEFAULT_TEXT_API_URL;
+  if (process.env.JULIA_TEXT_API_URL) {
+    const error = new Error(
+      'JULIA_TEXT_API_URL is not a canonical runtime authority; configure JULIA_BRAIN_ENDPOINT instead'
+    );
+    error.code = 'JULIA_TEXT_API_URL_FORBIDDEN';
+    throw error;
+  }
+
+  const binding = resolveBrainEndpoint(options.brainEndpoint);
+  return buildTextApiUrl(binding.endpoint);
 }
 
 function assertTextMessage(input) {
@@ -165,7 +172,6 @@ async function streamTextMessage(input, handlers = {}, options = {}) {
 }
 
 module.exports = {
-  DEFAULT_TEXT_API_URL,
   buildTextApiUrl,
   getTextApiUrl,
   sendTextMessage,
