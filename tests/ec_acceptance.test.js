@@ -2,14 +2,21 @@
  * EC-02/03/05 — Electron Conversation Convergence Acceptance.
  *
  * Verifies Electron behaves as Core-authoritative disposable projection.
- * Requires Julia Brain running on localhost:18089.
+ * Needs an ISOLATED brain: set JULIA_TEST_BRAIN_URL (never the production brain; the helper
+ * refuses it). Without it this script is skipped. (#237)
  */
 
 const http = require('http');
+const { assertNotProduction, resolveTestBrain } = require('./support/brain-target');
 
-const BRAIN = 'http://127.0.0.1:18089';
+const BRAIN = resolveTestBrain();
+if (!BRAIN) {
+  console.log('SKIP ec_acceptance: JULIA_TEST_BRAIN_URL is not set (an isolated brain is required)');
+  process.exit(0);
+}
 
 function fetchJson(url, opts = {}) {
+  assertNotProduction(url);
   return new Promise((resolve, reject) => {
     const u = new URL(url);
     const req = http.request(u, { method: opts.method || 'GET', headers: { 'Content-Type': 'application/json', Accept: 'application/json' }, ...opts }, (res) => {
